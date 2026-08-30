@@ -6,6 +6,22 @@ import urllib.error
 import urllib.request
 
 
+def load_env_file(path):
+    """Load simple KEY=VALUE entries without overriding real environment variables."""
+    env_path = os.path.expanduser(path)
+    if not os.path.isfile(env_path):
+        return
+    with open(env_path, encoding="utf-8") as env_file:
+        for line in env_file:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            name, value = line.split("=", 1)
+            name, value = name.strip(), value.strip()
+            if name and name not in os.environ:
+                os.environ[name] = value.strip('"\'')
+
+
 class OpenAICompatibleModelClient:
     def __init__(self, model, base_url, api_key, temperature=0.2, top_p=0.9, timeout=60):
         self.model = model

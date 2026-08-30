@@ -1,8 +1,9 @@
+import os
 import unittest
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from model_client import OpenAICompatibleModelClient
+from model_client import OpenAICompatibleModelClient, load_env_file
 
 from my_agent import MyAgent
 from parser import parse
@@ -58,6 +59,18 @@ class MyAgentTests(unittest.TestCase):
             response.read.return_value = b'{"choices":[{"message":{"content":"ok"}}]}'
             self.assertEqual(client.complete("hello", 10), "ok")
             self.assertEqual(open_url.call_args.args[0].full_url, "http://model/v1/chat/completions")
+
+    def test_env_file_loads_key_without_overriding_environment(self):
+        with TemporaryDirectory() as directory:
+            from pathlib import Path
+            env_path = Path(directory) / ".env"
+            env_path.write_text("DEMO_KEY=file-value\n# ignored\n", encoding="utf-8")
+            with patch.dict("os.environ", {}, clear=True):
+                load_env_file(str(env_path))
+                self.assertEqual(os.environ["DEMO_KEY"], "file-value")
+            with patch.dict("os.environ", {"DEMO_KEY": "existing"}, clear=True):
+                load_env_file(str(env_path))
+                self.assertEqual(os.environ["DEMO_KEY"], "existing")
 
 
 if __name__ == "__main__":
