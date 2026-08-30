@@ -82,4 +82,6 @@ def build_model_client(args):
     if args.provider == "ollama":
         return OllamaModelClient(args.model, args.host, args.temperature, args.top_p, args.timeout)
     api_key = os.environ.get(args.api_key_env, "") if args.api_key_env else ""
+    if not api_key:
+        raise RuntimeError(f"API key environment variable {args.api_key_env!r} is not set")
     return OpenAICompatibleModelClient(args.model, args.base_url, api_key, args.temperature, args.top_p, args.timeout)
