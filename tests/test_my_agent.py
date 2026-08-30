@@ -10,6 +10,7 @@ from unittest.mock import patch
 from model_client import OpenAICompatibleModelClient, OllamaModelClient, load_env_file
 from my_agent import MyAgent
 from parser import parse
+from tools import search
 
 
 class RecordingHandler(BaseHTTPRequestHandler):
@@ -89,17 +90,48 @@ class CurrentVersionTests(unittest.TestCase):
                 load_env_file(str(env_path))
                 self.assertEqual(os.environ["DEEPSEEK_API_KEY"], "file-secret")
 
-    def test_read_only_tool_table_exposes_second_stage_gaps(self):
+    def test_tool_table_contains_stage2_tools(self):
         with TemporaryDirectory() as directory:
-            class WriteRequestClient:
-                def complete(self, _prompt, _max_new_tokens):
-                    return '<tool>{"name":"write_file","args":{"path":"new.txt","content":"x"}}</tool>'
-
-            agent = MyAgent(WriteRequestClient(), directory, max_steps=1)
-            self.assertEqual(set(agent.tools), {"list_files", "read_file"})
+            agent = MyAgent(object(), directory, approval="auto")
+            self.assertEqual(set(agent.tools), {"list_files", "read_file", "search", "write_file", "patch_file", "run_shell"})
             self.assertEqual(parse('<tool>{"name":"write_file","args":{}}</tool>')["kind"], "tool")
-            with self.assertRaises(RuntimeError):
-                agent.ask("创建一个文件")
+            self.assertIn("missing argument", agent.run_tool("write_file", {}))
+
+    def test_write_patch_search_and_shell_tools(self):
+        with TemporaryDirectory() as directory:
+            agent = MyAgent(object(), directory, approval="auto")
+            self.assertIn("wrote", agent.run_tool("write_file", {"path": "main.py", "content": "needle\n"}))
+            self.assertIn("main.py:1", search(directory, {"pattern": "needle"}))
+            self.assertEqual(agent.run_tool("patch_file", {"path": "main.py", "old_text": "needle", "new_text": "fixed"}), "patched main.py")
+            self.assertIn("exit code: 0", agent.run_tool("run_shell", {"command": "python3 -c 'print(42)'"}))
+
+    def test_risky_tools_respect_never_and_ask_approval(self):
+        with TemporaryDirectory() as directory:
+            denied = MyAgent(object(), directory, approval="never")
+            self.assertIn("approval denied", denied.run_tool("write_file", {"path": "x.txt", "content": "x"}))
+            asked = MyAgent(object(), directory, approval="ask")
+            with patch("builtins.input", return_value="n"):
+                self.assertIn("approval denied", asked.run_tool("run_shell", {"command": "echo unsafe"}))
+
+    def test_tool_validation_and_workspace_symlink_boundary(self):
+        with TemporaryDirectory() as directory:
+            agent = MyAgent(object(), directory, approval="auto")
+            self.assertIn("pattern must not be empty", agent.run_tool("search", {"pattern": ""}))
+            self.assertIn("timeout must be between", agent.run_tool("run_shell", {"command": "echo x", "timeout": 121}))
+            outside = Path(directory).parent / "outside-stage2"
+            outside.mkdir(exist_ok=True)
+            link = Path(directory) / "link"
+            try:
+                link.symlink_to(outside, target_is_directory=True)
+            except (OSError, NotImplementedError):
+                return
+            self.assertIn("path escapes workspace", agent.run_tool("read_file", {"path": "link/secret.txt"}))
+
+    def test_parser_accepts_xml_write_and_patch_calls(self):
+        write = parse('<tool name="write_file" path="main.py"><content>print(1)</content></tool>')
+        patch = parse('<tool name="patch_file" path="main.py"><old_text>1</old_text><new_text>2</new_text></tool>')
+        self.assertEqual((write["name"], write["args"]["content"]), ("write_file", "print(1)"))
+        self.assertEqual((patch["name"], patch["args"]["new_text"]), ("patch_file", "2"))
 
 
 if __name__ == "__main__":

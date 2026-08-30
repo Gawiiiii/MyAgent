@@ -5,6 +5,7 @@ from my_agent import MyAgent
 
 
 def main(argv=None):
+    """解析命令行并运行 Agent；参数为可选 argv 列表，返回 None。"""
     parser = argparse.ArgumentParser(description="Minimal local MyAgent")
     parser.add_argument("message", nargs="?", default="")
     parser.add_argument("--cwd", default=".")
@@ -15,6 +16,8 @@ def main(argv=None):
     parser.add_argument("--model", default="deepseek-v4-flash")
     parser.add_argument("--host", default="http://127.0.0.1:11434")
     parser.add_argument("--max-steps", type=int, default=6)
+    parser.add_argument("--max-new-tokens", type=int, default=512)
+    parser.add_argument("--approval", choices=["ask", "auto", "never"], default="ask")
     parser.add_argument("--temperature", type=float, default=0.2)
     parser.add_argument("--top-p", type=float, default=0.9)
     parser.add_argument("--timeout", type=float, default=60)
@@ -22,7 +25,7 @@ def main(argv=None):
     if not args.message:
         parser.error("a user request is required")
     load_env_file(args.env_file)
-    answer = MyAgent(build_model_client(args), args.cwd, args.max_steps).ask(args.message)
+    answer = MyAgent(build_model_client(args), args.cwd, args.max_steps, args.approval, args.max_new_tokens).ask(args.message)
     print(f"<final>{answer}</final>")
 
 

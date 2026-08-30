@@ -7,7 +7,7 @@ import urllib.request
 
 
 def load_env_file(path):
-    """Load simple KEY=VALUE entries without overriding real environment variables."""
+    """加载简单 KEY=VALUE 配置；参数为 str 文件路径，返回 None 且不覆盖现有环境变量。"""
     env_path = os.path.expanduser(path)
     if not os.path.isfile(env_path):
         return
@@ -24,6 +24,7 @@ def load_env_file(path):
 
 class OpenAICompatibleModelClient:
     def __init__(self, model, base_url, api_key, temperature=0.2, top_p=0.9, timeout=60):
+        """初始化兼容客户端；参数为模型、地址、密钥及采样/超时配置，返回 None。"""
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
@@ -32,6 +33,7 @@ class OpenAICompatibleModelClient:
         self.timeout = timeout
 
     def complete(self, prompt, max_new_tokens):
+        """请求聊天补全；参数为 str Prompt 和 int token 上限，返回模型文本 str。"""
         payload = {
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
@@ -64,6 +66,7 @@ class OpenAICompatibleModelClient:
 
 class OllamaModelClient:
     def __init__(self, model, host, temperature=0.2, top_p=0.9, timeout=60):
+        """初始化 Ollama 客户端；参数为模型、主机及采样/超时配置，返回 None。"""
         self.model = model
         self.host = host.rstrip("/")
         self.temperature = temperature
@@ -71,6 +74,7 @@ class OllamaModelClient:
         self.timeout = timeout
 
     def complete(self, prompt, max_new_tokens):
+        """请求 Ollama 生成；参数为 str Prompt 和 int token 上限，返回模型文本 str。"""
         payload = {
             "model": self.model,
             "prompt": prompt,
@@ -95,6 +99,7 @@ class OllamaModelClient:
 
 
 def build_model_client(args):
+    """按 CLI 配置构造客户端；参数为 argparse Namespace，返回兼容客户端对象。"""
     if args.provider == "ollama":
         return OllamaModelClient(args.model, args.host, args.temperature, args.top_p, args.timeout)
     api_key = os.environ.get(args.api_key_env, "") if args.api_key_env else ""
