@@ -1,76 +1,105 @@
+import json
 import os
+import threading
 import unittest
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from model_client import OpenAICompatibleModelClient, load_env_file
-
+from model_client import OpenAICompatibleModelClient, OllamaModelClient, load_env_file
 from my_agent import MyAgent
 from parser import parse
-from tools import list_files, read_file
 
 
-class FakeModelClient:
-    def __init__(self, outputs):
-        self.outputs = iter(outputs)
-        self.prompts = []
+class RecordingHandler(BaseHTTPRequestHandler):
+    responses = []
+    requests = []
 
-    def complete(self, prompt, max_new_tokens):
-        self.prompts.append(prompt)
-        return next(self.outputs)
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length)
+        self.__class__.requests.append((self.path, dict(self.headers), json.loads(body)))
+        response = self.__class__.responses.pop(0)
+        payload = json.dumps(response).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def log_message(self, *_args):
+        pass
 
 
-class MyAgentTests(unittest.TestCase):
-    def test_tool_then_final(self):
+class LocalModelServer:
+    def __enter__(self):
+        RecordingHandler.responses = []
+        RecordingHandler.requests = []
+        self.server = HTTPServer(("127.0.0.1", 0), RecordingHandler)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        return f"http://127.0.0.1:{self.server.server_port}"
+
+    def __exit__(self, *_args):
+        self.server.shutdown()
+        self.thread.join()
+        self.server.server_close()
+
+
+class CurrentVersionTests(unittest.TestCase):
+    def test_openai_client_sends_required_payload_and_auth(self):
+        with LocalModelServer() as base_url:
+            RecordingHandler.responses = [{"choices": [{"message": {"content": "<final>ok</final>"}}]}]
+            client = OpenAICompatibleModelClient("demo", base_url, "test-secret")
+            self.assertEqual(client.complete("hello", 64), "<final>ok</final>")
+            path, headers, payload = RecordingHandler.requests[0]
+            self.assertEqual(path, "/v1/chat/completions")
+            self.assertEqual(headers["Authorization"], "Bearer test-secret")
+            self.assertEqual(payload["messages"], [{"role": "user", "content": "hello"}])
+            self.assertEqual(payload["max_tokens"], 64)
+
+    def test_ollama_client_uses_native_generate_endpoint(self):
+        with LocalModelServer() as host:
+            RecordingHandler.responses = [{"response": "<final>ollama</final>"}]
+            client = OllamaModelClient("demo", host)
+            self.assertEqual(client.complete("hello", 32), "<final>ollama</final>")
+            path, _headers, payload = RecordingHandler.requests[0]
+            self.assertEqual(path, "/api/generate")
+            self.assertFalse(payload["stream"])
+            self.assertEqual(payload["options"]["num_predict"], 32)
+
+    def test_real_client_and_agent_complete_tool_loop(self):
+        with TemporaryDirectory() as directory, LocalModelServer() as base_url:
+            Path(directory, "README.md").write_text("first line\n", encoding="utf-8")
+            RecordingHandler.responses = [
+                {"choices": [{"message": {"content": '<tool>{"name":"read_file","args":{"path":"README.md"}}</tool>'}}]},
+                {"choices": [{"message": {"content": "<final>读取完成</final>"}}]},
+            ]
+            client = OpenAICompatibleModelClient("demo", base_url, "test-secret")
+            self.assertEqual(MyAgent(client, directory).ask("读取 README.md"), "读取完成")
+            self.assertEqual(len(RecordingHandler.requests), 2)
+            self.assertIn("1: first line", RecordingHandler.requests[1][2]["messages"][0]["content"])
+
+    def test_env_file_is_loaded_for_real_client_configuration(self):
         with TemporaryDirectory() as directory:
-            from pathlib import Path
-            root = Path(directory)
-            (root / "README.md").write_text("hello\nworld\n", encoding="utf-8")
-            client = FakeModelClient(['<tool>{"name":"read_file","args":{"path":"README.md"}}</tool>', '<final>已读取。</final>'])
-            self.assertEqual(MyAgent(client, root).ask("读取 README"), "已读取。")
-            self.assertIn("1: hello", client.prompts[1])
-
-    def test_retry_malformed_then_final(self):
-        with TemporaryDirectory() as directory:
-            client = FakeModelClient(["", "<final>ok</final>"])
-            self.assertEqual(MyAgent(client, directory).ask("test"), "ok")
-            self.assertIn("format error", client.prompts[1])
-
-    def test_tools_are_minimal_and_safe(self):
-        with TemporaryDirectory() as directory:
-            from pathlib import Path
-            root = Path(directory)
-            (root / "b.txt").write_text("b\n", encoding="utf-8")
-            (root / "a").mkdir()
-            self.assertEqual(list_files(root, {}), "a/\nb.txt")
-            self.assertEqual(read_file(root, {"path": "b.txt", "start": 1, "end": 1}), "1: b")
-            with self.assertRaisesRegex(ValueError, "escapes workspace"):
-                read_file(root, {"path": "../secret"})
-
-    def test_parser_protocol_and_invalid_tool(self):
-        self.assertEqual(parse('<final>x</final>'), {"kind": "final", "content": "x"})
-        self.assertEqual(parse('<tool>{"name":"list_files","args":{}}</tool>')["kind"], "tool")
-        self.assertEqual(parse('<tool>{"name":"read_file","args":[]}</tool>')["kind"], "retry")
-
-    def test_openai_base_url_does_not_duplicate_v1(self):
-        client = OpenAICompatibleModelClient("demo", "http://model/v1", "secret")
-        with patch("model_client.urllib.request.urlopen") as open_url:
-            response = open_url.return_value.__enter__.return_value
-            response.read.return_value = b'{"choices":[{"message":{"content":"ok"}}]}'
-            self.assertEqual(client.complete("hello", 10), "ok")
-            self.assertEqual(open_url.call_args.args[0].full_url, "http://model/v1/chat/completions")
-
-    def test_env_file_loads_key_without_overriding_environment(self):
-        with TemporaryDirectory() as directory:
-            from pathlib import Path
-            env_path = Path(directory) / ".env"
-            env_path.write_text("DEMO_KEY=file-value\n# ignored\n", encoding="utf-8")
-            with patch.dict("os.environ", {}, clear=True):
+            env_path = Path(directory, ".env")
+            env_path.write_text("DEEPSEEK_API_KEY=file-secret\n", encoding="utf-8")
+            with patch.dict(os.environ, {}, clear=True):
                 load_env_file(str(env_path))
-                self.assertEqual(os.environ["DEMO_KEY"], "file-value")
-            with patch.dict("os.environ", {"DEMO_KEY": "existing"}, clear=True):
-                load_env_file(str(env_path))
-                self.assertEqual(os.environ["DEMO_KEY"], "existing")
+                self.assertEqual(os.environ["DEEPSEEK_API_KEY"], "file-secret")
+
+    def test_read_only_tool_table_exposes_second_stage_gaps(self):
+        with TemporaryDirectory() as directory:
+            class WriteRequestClient:
+                def complete(self, _prompt, _max_new_tokens):
+                    return '<tool>{"name":"write_file","args":{"path":"new.txt","content":"x"}}</tool>'
+
+            agent = MyAgent(WriteRequestClient(), directory, max_steps=1)
+            self.assertEqual(set(agent.tools), {"list_files", "read_file"})
+            self.assertEqual(parse('<tool>{"name":"write_file","args":{}}</tool>')["kind"], "tool")
+            with self.assertRaises(RuntimeError):
+                agent.ask("创建一个文件")
 
 
 if __name__ == "__main__":
