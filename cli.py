@@ -1,7 +1,10 @@
 import argparse
+from pathlib import Path
 
 from model_client import build_model_client, load_env_file
 from my_agent import MyAgent
+from session import SessionStore
+from workspace import WorkspaceContext
 
 
 def main(argv=None):
@@ -21,12 +24,44 @@ def main(argv=None):
     parser.add_argument("--temperature", type=float, default=0.2)
     parser.add_argument("--top-p", type=float, default=0.9)
     parser.add_argument("--timeout", type=float, default=60)
+    parser.add_argument("--resume", default="", help="session ID or latest")
     args = parser.parse_args(argv)
-    if not args.message:
-        parser.error("a user request is required")
     load_env_file(args.env_file)
-    answer = MyAgent(build_model_client(args), args.cwd, args.max_steps, args.approval, args.max_new_tokens).ask(args.message)
-    print(f"<final>{answer}</final>")
+    workspace = WorkspaceContext.build(args.cwd)
+    store = SessionStore(Path(workspace.repo_root) / ".mini-coding-agent" / "sessions")
+    client = build_model_client(args)
+    common = {"max_steps": args.max_steps, "approval": args.approval, "max_new_tokens": args.max_new_tokens}
+    if args.resume:
+        session_id = store.latest() if args.resume == "latest" else args.resume
+        if not session_id:
+            parser.error("no session available to resume")
+        agent = MyAgent.from_session(client, workspace, store, session_id, **common)
+    else:
+        agent = MyAgent(client, workspace.repo_root, workspace=workspace, session_store=store, **common)
+    if args.message:
+        print(f"<final>{agent.ask(args.message)}</final>")
+        return
+    while True:
+        try:
+            message = input("my-agent> ").strip()
+        except EOFError:
+            break
+        if message in {"/exit", "/quit"}:
+            break
+        if message == "/help":
+            print("/help /memory /session /reset /exit /quit")
+        elif message == "/memory":
+            print(agent.session.get("memory", {}))
+        elif message == "/session":
+            print(store.path(agent.session["id"]))
+        elif message == "/reset":
+            agent.reset()
+            print("session reset")
+        elif message:
+            try:
+                print(f"<final>{agent.ask(message)}</final>")
+            except RuntimeError as exc:
+                print(f"error: {exc}")
 
 
 if __name__ == "__main__":
