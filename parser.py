@@ -13,8 +13,10 @@ def parse(raw):
     if not raw or not raw.strip():
         return {"kind": "retry", "error": "empty response"}
     final = extract(raw, "final")
-    if final is not None:
+    if final is not None and final.strip():
         return {"kind": "final", "content": final}
+    if final is not None:
+        return {"kind": "retry", "error": "empty final response"}
     payload = extract(raw, "tool")
     if payload is None:
         match = re.fullmatch(r'\s*<tool\s+name="(write_file|patch_file)"\s+path="([^"]+)">(.*?)</tool>\s*', raw or "", re.DOTALL)

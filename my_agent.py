@@ -37,21 +37,37 @@ class MyAgent:
         """循环请求模型并执行工具；参数为用户 str 请求，返回最终答案 str。"""
         self.record({"role": "user", "content": user_message})
         self.session["memory"]["task"] = user_message
-        observations = ""
-        for _ in range(self.max_steps):
+        self.session_store.save(self.session)
+        observations, attempts, tool_steps = "", 0, 0
+        max_attempts = max(self.max_steps * 3, self.max_steps + 4)
+        while attempts < max_attempts and tool_steps < self.max_steps:
+            attempts += 1
             raw = self.model_client.complete(self.prompt(user_message, observations), self.max_new_tokens)
             result = parse(raw)
             if result["kind"] == "final":
                 self.record({"role": "assistant", "content": result["content"]})
                 return result["content"]
             if result["kind"] == "retry":
+                self.record({"role": "assistant", "content": f"format error: {result['error']}"})
                 observations += f"\nModel format error: {result['error']}. Retry using the required tag."
                 continue
             name, args = result["name"], result["args"]
+            tool_steps += 1
+            if self.repeated_tool_call(name, args):
+                output = f"error: repeated tool call for {name} with identical arguments"
+                self.note_tool(name, args, output)
+                observations += f"\n{name} result:\n{output}"
+                continue
             output = self.run_tool(name, args)
             self.note_tool(name, args, output)
             observations += f"\n{name} result:\n{output}"
-        raise RuntimeError(f"model did not produce a final answer within {self.max_steps} steps")
+        stop = f"Stopped after {attempts} attempts and {tool_steps} tool steps without a final answer."
+        self.record({"role": "assistant", "content": stop})
+        return stop
+
+    def repeated_tool_call(self, name, args):
+        """判断工具调用是否重复；参数为工具名 str 和参数 dict，返回 bool。"""
+        return any(item.get("role") == "tool" and item.get("name") == name and item.get("args") == args for item in self.session["history"])
 
     def approve(self, name, args):
         """决定风险工具是否执行；参数为工具名 str 和参数 dict，返回允许执行的 bool。"""
