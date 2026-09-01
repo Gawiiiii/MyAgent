@@ -44,14 +44,21 @@ class MultiStageRealAPITests(unittest.TestCase):
         self.trace = []
 
     def tearDown(self):
-        """在测试结束后输出每轮用户请求、工具调用和 LLM 反馈；无参数，返回 None。"""
+        """在测试结束后写入每轮轨迹日志；无参数，返回 None。"""
         if not self.trace:
             return
-        print("\n=== full_test_2 round trace ===")
+        log_path = Path(os.environ.get("MYAGENT_FULL_TEST_LOG", PROJECT_ROOT / "full_test_2_trace.log"))
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        lines = [f"=== {self.id()} ==="]
         for index, item in enumerate(self.trace, 1):
-            print(f"Round {index} user request: {item['request']}")
-            print(f"Round {index} tool call: {item['tool'] or '(none)'}")
-            print(f"Round {index} LLM output:\n{item['output']}")
+            lines.extend([
+                f"Round {index} user request: {item['request']}",
+                f"Round {index} tool call: {item['tool'] or '(none)'}",
+                f"Round {index} LLM output:\n{item['output']}",
+                "",
+            ])
+        with log_path.open("a", encoding="utf-8") as log_file:
+            log_file.write("\n".join(lines) + "\n")
 
     def ask_stage(self, agent, request):
         """执行一个多轮阶段并记录每次 LLM 反馈；参数为 MyAgent 和用户请求 str，返回最终答案 str。"""
