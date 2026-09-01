@@ -17,7 +17,7 @@ from workspace import WorkspaceContext
 
 
 class MyAgent:
-    def __init__(self, model_client, root, max_steps=6, approval="ask", max_new_tokens=512, workspace=None, session_store=None, session=None, depth=0, max_depth=1, read_only=False, max_parallel_delegates=3):
+    def __init__(self, model_client, root, max_steps=6, approval="ask", max_new_tokens=512, workspace=None, session_store=None, session=None, depth=0, max_depth=1, read_only=False, max_parallel_delegates=3, persist_session=True):
         """初始化 Agent；参数为模型客户端、根目录、运行配置及可选上下文会话，返回 None。"""
         self.model_client = model_client
         self.workspace = workspace or WorkspaceContext.build(root)
@@ -31,12 +31,17 @@ class MyAgent:
         if not 1 <= max_parallel_delegates <= 8:
             raise ValueError("max_parallel_delegates must be between 1 and 8")
         self.max_parallel_delegates = max_parallel_delegates
+        self.persist_session = persist_session
         self.tools = build_tools(self)
         self.session_store = session_store or SessionStore(self.root / ".mini-coding-agent" / "sessions")
         self.session = session or {"id": datetime.now().strftime("%Y%m%d-%H%M%S-%f"), "created_at": datetime.now(timezone.utc).isoformat(), "workspace_root": str(self.root), "history": [], "memory": {"task": "", "files": [], "notes": []}, "changes": []}
         self.session.setdefault("changes", [])
         self.changes = self.session["changes"]
-        self.session_store.save(self.session)
+
+    def _save_session(self):
+        """按持久化开关保存当前会话；参数为 self，返回 None。"""
+        if self.persist_session:
+            self.session_store.save(self.session)
 
     @classmethod
     def from_session(cls, model_client, workspace, session_store, session_id, **kwargs):
@@ -53,7 +58,7 @@ class MyAgent:
         """循环请求模型并执行工具；参数为用户 str 请求，返回最终答案 str。"""
         self.record({"role": "user", "content": user_message})
         self.session["memory"]["task"] = user_message
-        self.session_store.save(self.session)
+        self._save_session()
         observations, attempts, tool_steps = "", 0, 0
         max_attempts = max(self.max_steps * 3, self.max_steps + 4)
         while attempts < max_attempts and tool_steps < self.max_steps:
@@ -114,7 +119,7 @@ class MyAgent:
                 record = ChangeRecord(args["path"], change["before"], change["after"], name, timestamp())
                 record_id = max((item.get("id", 0) for item in self.changes), default=0) + 1
                 self.changes.append({"id": record_id, "path": record.path, "before": record.before, "after": record.after, "operation": record.operation, "timestamp": record.timestamp, "diff": change["diff"]})
-                self.session_store.save(self.session)
+                self._save_session()
                 return f"{applied}\n{change['diff']}"
             if not self.approve(name, args):
                 return f"error: approval denied for {name}"
@@ -153,7 +158,7 @@ class MyAgent:
         except (OSError, ValueError) as exc:
             return f"error: {exc}"
         self.changes.remove(selected)
-        self.session_store.save(self.session)
+        self._save_session()
         return result
 
     def tool_delegate(self, args):
@@ -173,7 +178,7 @@ class MyAgent:
             approval="never", max_new_tokens=self.max_new_tokens,
             workspace=self.workspace, session_store=self.session_store,
             depth=self.depth + 1, max_depth=self.max_depth, read_only=True,
-            max_parallel_delegates=self.max_parallel_delegates,
+            max_parallel_delegates=self.max_parallel_delegates, persist_session=False,
         )
 
     def tool_delegate_parallel(self, args):
@@ -201,7 +206,7 @@ class MyAgent:
     def record(self, item):
         """追加并立即保存历史记录；参数为 dict 记录项，返回 None。"""
         self.session["history"].append(item)
-        self.session_store.save(self.session)
+        self._save_session()
 
     def note_tool(self, name, args, result):
         """记录工具访问和结果摘要；参数为名称、参数字典和结果字符串，返回 None。"""
@@ -213,7 +218,7 @@ class MyAgent:
         """清空当前会话历史和记忆；参数为 self，返回 None。"""
         self.session["history"] = []
         self.session["memory"] = {"task": "", "files": [], "notes": []}
-        self.session_store.save(self.session)
+        self._save_session()
 
 
 if __name__ == "__main__":
