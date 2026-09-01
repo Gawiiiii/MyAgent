@@ -2,6 +2,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
+from audit import AuditLog
 from changes import (
     ChangeRecord,
     apply_change,
@@ -17,7 +18,7 @@ from workspace import WorkspaceContext
 
 
 class MyAgent:
-    def __init__(self, model_client, root, max_steps=6, approval="ask", max_new_tokens=512, workspace=None, session_store=None, session=None, depth=0, max_depth=1, read_only=False, max_parallel_delegates=3, persist_session=True):
+    def __init__(self, model_client, root, max_steps=6, approval="ask", max_new_tokens=512, workspace=None, session_store=None, session=None, depth=0, max_depth=1, read_only=False, max_parallel_delegates=3, persist_session=True, audit_log=None):
         """初始化 Agent；参数为模型客户端、根目录、运行配置及可选上下文会话，返回 None。"""
         self.model_client = model_client
         self.workspace = workspace or WorkspaceContext.build(root)
@@ -37,6 +38,7 @@ class MyAgent:
         self.session = session or {"id": datetime.now().strftime("%Y%m%d-%H%M%S-%f"), "created_at": datetime.now(timezone.utc).isoformat(), "workspace_root": str(self.root), "history": [], "memory": {"task": "", "files": [], "notes": []}, "changes": []}
         self.session.setdefault("changes", [])
         self.changes = self.session["changes"]
+        self.audit_log = audit_log or AuditLog(self.root / ".mini-coding-agent" / "audit" / f"{self.session['id']}.jsonl")
 
     def _save_session(self):
         """按持久化开关保存当前会话；参数为 self，返回 None。"""
@@ -63,10 +65,19 @@ class MyAgent:
         max_attempts = max(self.max_steps * 3, self.max_steps + 4)
         while attempts < max_attempts and tool_steps < self.max_steps:
             attempts += 1
-            raw = self.model_client.complete(self.prompt(user_message, observations), self.max_new_tokens)
+            prompt = self.prompt(user_message, observations)
+            self.audit_log.append("model_request", attempt=attempts, max_new_tokens=self.max_new_tokens)
+            try:
+                raw = self.model_client.complete(prompt, self.max_new_tokens)
+            except RuntimeError as exc:
+                self.audit_log.append("model_error", attempt=attempts, error=str(exc))
+                raise
+            self.audit_log.append("model_response", attempt=attempts, output=raw)
             result = parse(raw)
+            self.audit_log.append("parse_result", kind=result.get("kind"), error=result.get("error", ""))
             if result["kind"] == "final":
                 self.record({"role": "assistant", "content": result["content"]})
+                self.audit_log.append("final_answer", content=result["content"])
                 return result["content"]
             if result["kind"] == "retry":
                 self.record({"role": "assistant", "content": f"format error: {result['error']}"})
@@ -79,11 +90,14 @@ class MyAgent:
                 self.note_tool(name, args, output)
                 observations += f"\n{name} result:\n{output}"
                 continue
+            self.audit_log.append("tool_start", name=name, args=args)
             output = self.run_tool(name, args)
+            self.audit_log.append("tool_error" if output.startswith("error:") else "tool_result", name=name, result=output)
             self.note_tool(name, args, output)
             observations += f"\n{name} result:\n{output}"
         stop = f"Stopped after {attempts} attempts and {tool_steps} tool steps without a final answer."
         self.record({"role": "assistant", "content": stop})
+        self.audit_log.append("final_answer", content=stop)
         return stop
 
     def repeated_tool_call(self, name, args):
@@ -167,8 +181,10 @@ class MyAgent:
             raise ValueError("task must not be empty")
         if self.depth >= self.max_depth:
             raise ValueError("maximum delegation depth reached")
+        self.audit_log.append("delegation_start", task=args["task"])
         child = self._build_read_only_child()
         answer = child.ask(args["task"])
+        self.audit_log.append("delegation_end", result=answer)
         return f"delegate_result: {answer}"
 
     def _build_read_only_child(self):
@@ -179,6 +195,7 @@ class MyAgent:
             workspace=self.workspace, session_store=self.session_store,
             depth=self.depth + 1, max_depth=self.max_depth, read_only=True,
             max_parallel_delegates=self.max_parallel_delegates, persist_session=False,
+            audit_log=self.audit_log,
         )
 
     def tool_delegate_parallel(self, args):
@@ -190,6 +207,7 @@ class MyAgent:
             raise ValueError(f"tasks must contain at most {self.max_parallel_delegates} items")
         if self.depth >= self.max_depth:
             raise ValueError("maximum delegation depth reached")
+        self.audit_log.append("delegation_start", tasks=tasks)
 
         def execute(task):
             if not isinstance(task, str) or not task.strip():
@@ -201,7 +219,9 @@ class MyAgent:
 
         with ThreadPoolExecutor(max_workers=min(len(tasks), self.max_parallel_delegates)) as executor:
             results = list(executor.map(execute, tasks))
-        return "\n".join(f"delegate_result[{index}]: {result}" for index, result in enumerate(results, 1))
+        output = "\n".join(f"delegate_result[{index}]: {result}" for index, result in enumerate(results, 1))
+        self.audit_log.append("delegation_end", result=output)
+        return output
 
     def record(self, item):
         """追加并立即保存历史记录；参数为 dict 记录项，返回 None。"""

@@ -17,7 +17,7 @@ my-agent = "cli:main"
 mini-agent = "cli:main"
 
 [tool.setuptools]
-py-modules = ["changes", "cli", "context", "model_client", "my_agent", "parser", "session", "tools", "workspace"]
+py-modules = ["audit", "changes", "cli", "context", "model_client", "my_agent", "parser", "session", "tools", "workspace"]
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F", "I"]

@@ -55,7 +55,7 @@ def run(argv=None):
         if message in {"/exit", "/quit"}:
             break
         if message == "/help":
-            print("/help /memory /session /diff /rollback [id] /reset /exit /quit")
+            print("/help /memory /session /diff /rollback [id] /audit [N] /audit-clear /reset /exit /quit")
         elif message == "/memory":
             print(agent.session.get("memory", {}))
         elif message == "/session":
@@ -72,6 +72,25 @@ def run(argv=None):
                 print("error: usage /rollback [id]")
             else:
                 print(agent.rollback(parts[1] if len(parts) == 2 else None))
+        elif message.startswith("/audit-clear"):
+            if message != "/audit-clear":
+                print("error: usage /audit-clear")
+            else:
+                agent.audit_log.clear()
+                print("audit cleared")
+        elif message.startswith("/audit"):
+            parts = message.split()
+            if len(parts) > 2:
+                print("error: usage /audit [N]")
+            else:
+                try:
+                    limit = int(parts[1]) if len(parts) == 2 else 20
+                    if limit < 1:
+                        raise ValueError
+                    for event in agent.audit_log.read(limit):
+                        print(event)
+                except ValueError:
+                    print("error: audit limit must be a positive integer")
         elif message == "/reset":
             agent.reset()
             print("session reset")

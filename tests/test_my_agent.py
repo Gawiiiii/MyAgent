@@ -6,5 +6,6 @@ from tests.stage4_tests import Stage4Tests
 from tests.stage5_tests import Stage5Tests
 from tests.stage6_tests import Stage6Tests
 from tests.stage7_tests import Stage7Tests
+from tests.stage8_tests import Stage8Tests
 
-__all__ = ["CurrentVersionTests", "Stage3Tests", "Stage4Tests", "Stage5Tests", "Stage6Tests", "Stage7Tests"]
+__all__ = ["CurrentVersionTests", "Stage3Tests", "Stage4Tests", "Stage5Tests", "Stage6Tests", "Stage7Tests", "Stage8Tests"]
