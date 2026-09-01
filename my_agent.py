@@ -2,6 +2,13 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
+from changes import (
+    ChangeRecord,
+    apply_change,
+    preview_change,
+    rollback_change,
+    timestamp,
+)
 from context import build_prompt
 from parser import parse
 from session import SessionStore
@@ -26,7 +33,9 @@ class MyAgent:
         self.max_parallel_delegates = max_parallel_delegates
         self.tools = build_tools(self)
         self.session_store = session_store or SessionStore(self.root / ".mini-coding-agent" / "sessions")
-        self.session = session or {"id": datetime.now().strftime("%Y%m%d-%H%M%S-%f"), "created_at": datetime.now(timezone.utc).isoformat(), "workspace_root": str(self.root), "history": [], "memory": {"task": "", "files": [], "notes": []}}
+        self.session = session or {"id": datetime.now().strftime("%Y%m%d-%H%M%S-%f"), "created_at": datetime.now(timezone.utc).isoformat(), "workspace_root": str(self.root), "history": [], "memory": {"task": "", "files": [], "notes": []}, "changes": []}
+        self.session.setdefault("changes", [])
+        self.changes = self.session["changes"]
         self.session_store.save(self.session)
 
     @classmethod
@@ -76,7 +85,7 @@ class MyAgent:
         """判断工具调用是否重复；参数为工具名 str 和参数 dict，返回 bool。"""
         return any(item.get("role") == "tool" and item.get("name") == name and item.get("args") == args for item in self.session["history"])
 
-    def approve(self, name, args):
+    def approve(self, name, args, preview=""):
         """决定风险工具是否执行；参数为工具名 str 和参数 dict，返回允许执行的 bool。"""
         if not self.tools[name]["risky"]:
             return True
@@ -84,6 +93,8 @@ class MyAgent:
             return True
         if self.approval == "never":
             return False
+        if preview:
+            print(preview["diff"])
         answer = input(f"Allow {name} with {args}? [y/N] ").strip().lower()
         return answer in {"y", "yes"}
 
@@ -95,11 +106,55 @@ class MyAgent:
             if self.read_only and name not in {"list_files", "read_file", "search"}:
                 return f"error: read-only agent cannot use {name}"
             validate_tool(self.root, name, args)
+            if name in {"write_file", "patch_file"}:
+                change = self.preview_tool(name, args)
+                if not self.approve(name, args, change):
+                    return f"error: approval denied for {name}"
+                applied = apply_change(self.root, args["path"], name, change["before"], change["after"])
+                record = ChangeRecord(args["path"], change["before"], change["after"], name, timestamp())
+                record_id = max((item.get("id", 0) for item in self.changes), default=0) + 1
+                self.changes.append({"id": record_id, "path": record.path, "before": record.before, "after": record.after, "operation": record.operation, "timestamp": record.timestamp, "diff": change["diff"]})
+                self.session_store.save(self.session)
+                return f"{applied}\n{change['diff']}"
             if not self.approve(name, args):
                 return f"error: approval denied for {name}"
             return self.tools[name]["run"](self.root, args)
         except (KeyError, ValueError, TypeError, OSError) as exc:
             return f"error: {exc}"
+
+    def preview_tool(self, name, args):
+        """计算写入或补丁的变更预览；参数为工具名和参数字典，返回 before/after/diff 字典。"""
+        target = self.root / args["path"]
+        before = target.read_text(encoding="utf-8") if target.exists() else None
+        if name == "write_file":
+            after = args["content"]
+        elif name == "patch_file":
+            if before is None:
+                raise ValueError(f"not a file: {args['path']}")
+            occurrences = before.count(args["old_text"])
+            if occurrences != 1:
+                raise ValueError(f"old_text must occur exactly once (found {occurrences})")
+            after = before.replace(args["old_text"], args["new_text"])
+        else:
+            raise ValueError(f"preview is not supported for {name}")
+        return {"before": before, "after": after, "diff": preview_change(self.root, args["path"], name, before, after)}
+
+    def rollback(self, change_id=None):
+        """回滚最近或指定变更；参数为可选整数变更 ID，返回操作摘要或错误文本。"""
+        if not self.changes:
+            return "error: no changes to roll back"
+        try:
+            selected = self.changes[-1] if change_id is None else next(item for item in self.changes if item.get("id") == int(change_id))
+        except (StopIteration, TypeError, ValueError):
+            return f"error: change not found: {change_id}"
+        record = ChangeRecord(selected["path"], selected["before"], selected["after"], selected["operation"], selected["timestamp"])
+        try:
+            result = rollback_change(self.root, record)
+        except (OSError, ValueError) as exc:
+            return f"error: {exc}"
+        self.changes.remove(selected)
+        self.session_store.save(self.session)
+        return result
 
     def tool_delegate(self, args):
         """运行受限只读子 Agent；参数为含 task 的 dict，返回 delegate_result 文本。"""

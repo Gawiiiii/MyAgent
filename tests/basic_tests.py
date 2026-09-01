@@ -93,7 +93,7 @@ class CurrentVersionTests(unittest.TestCase):
     def test_tool_table_contains_stage2_tools(self):
         with TemporaryDirectory() as directory:
             agent = MyAgent(object(), directory, approval="auto")
-            self.assertEqual(set(agent.tools), {"list_files", "read_file", "search", "write_file", "patch_file", "run_shell", "delegate", "delegate_parallel"})
+            self.assertEqual(set(agent.tools), {"list_files", "read_file", "search", "write_file", "patch_file", "run_shell", "delegate", "delegate_parallel", "preview_file"})
             self.assertEqual(parse('<tool>{"name":"write_file","args":{}}</tool>')["kind"], "tool")
             self.assertIn("missing argument", agent.run_tool("write_file", {}))
 
@@ -102,7 +102,7 @@ class CurrentVersionTests(unittest.TestCase):
             agent = MyAgent(object(), directory, approval="auto")
             self.assertIn("wrote", agent.run_tool("write_file", {"path": "main.py", "content": "needle\n"}))
             self.assertIn("main.py:1", search(directory, {"pattern": "needle"}))
-            self.assertEqual(agent.run_tool("patch_file", {"path": "main.py", "old_text": "needle", "new_text": "fixed"}), "patched main.py")
+            self.assertTrue(agent.run_tool("patch_file", {"path": "main.py", "old_text": "needle", "new_text": "fixed"}).startswith("patched main.py"))
             self.assertIn("exit code: 0", agent.run_tool("run_shell", {"command": "python3 -c 'print(42)'"}))
 
     def test_risky_tools_respect_never_and_ask_approval(self):

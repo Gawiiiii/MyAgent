@@ -2,6 +2,8 @@ import re
 import subprocess
 from pathlib import Path
 
+from changes import preview_change
+
 
 def path(root, raw_path):
     """解析工作区内路径；参数为 Path 根目录和 str 相对路径，返回已解析 Path。"""
@@ -76,6 +78,13 @@ def patch_file(root, args):
     return f"patched {file_path.relative_to(Path(root).resolve())}"
 
 
+def preview_file(root, args):
+    """预览文件写入差异；参数为 Path 根目录和含 path/content 的 dict，返回 diff str。"""
+    file_path = path(root, args["path"])
+    before = file_path.read_text(encoding="utf-8") if file_path.exists() else None
+    return preview_change(root, args["path"], "write_file", before, args["content"])
+
+
 def run_shell(root, args):
     """在工作区执行 Shell 命令；参数为 Path 根目录和含 command/timeout 的 dict，返回 stdout/stderr str。"""
     command = args["command"]
@@ -101,6 +110,7 @@ def validate_tool(root, name, args):
         "patch_file": ("path", "old_text", "new_text"), "run_shell": ("command",),
         "delegate": ("task",),
         "delegate_parallel": ("tasks",),
+        "preview_file": ("path", "content"),
     }.get(name, ())
     for key in required:
         if key not in args:
@@ -141,6 +151,7 @@ def build_tools(agent):
         "run_shell": {"schema": {"command": "str", "timeout": "int?"}, "risky": True, "description": "run a shell command", "run": run_shell},
         "delegate": {"schema": {"task": "str"}, "risky": False, "description": "delegate a read-only analysis task", "run": lambda _root, args: agent.tool_delegate(args)},
         "delegate_parallel": {"schema": {"tasks": "list[str]"}, "risky": False, "description": "delegate bounded read-only analysis tasks in parallel", "run": lambda _root, args: agent.tool_delegate_parallel(args)},
+        "preview_file": {"schema": {"path": "str", "content": "str"}, "risky": False, "description": "preview a file write diff", "run": preview_file},
     }
     if agent.read_only:
         return {name: tools[name] for name in ("list_files", "read_file", "search")}

@@ -55,11 +55,23 @@ def run(argv=None):
         if message in {"/exit", "/quit"}:
             break
         if message == "/help":
-            print("/help /memory /session /reset /exit /quit")
+            print("/help /memory /session /diff /rollback [id] /reset /exit /quit")
         elif message == "/memory":
             print(agent.session.get("memory", {}))
         elif message == "/session":
             print(store.path(agent.session["id"]))
+        elif message == "/diff":
+            if not agent.changes:
+                print("no changes")
+            else:
+                for change in agent.changes:
+                    print(f"[{change['id']}] {change['operation']} {change['path']}\n{change['diff']}")
+        elif message.startswith("/rollback"):
+            parts = message.split()
+            if len(parts) > 2:
+                print("error: usage /rollback [id]")
+            else:
+                print(agent.rollback(parts[1] if len(parts) == 2 else None))
         elif message == "/reset":
             agent.reset()
             print("session reset")
