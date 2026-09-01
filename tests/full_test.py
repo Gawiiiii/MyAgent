@@ -7,7 +7,6 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 HAS_CONFIGURATION = bool(os.environ.get("DEEPSEEK_API_KEY")) or (PROJECT_ROOT / ".env").exists()
 RUN_REAL_API = os.environ.get("MYAGENT_RUN_FULL_TESTS") == "1" and HAS_CONFIGURATION

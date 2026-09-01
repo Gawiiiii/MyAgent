@@ -7,7 +7,7 @@ from session import SessionStore
 from workspace import WorkspaceContext
 
 
-def main(argv=None):
+def run(argv=None):
     """解析命令行并运行 Agent；参数为可选 argv 列表，返回 None。"""
     parser = argparse.ArgumentParser(description="Minimal local MyAgent")
     parser.add_argument("message", nargs="?", default="")
@@ -25,12 +25,13 @@ def main(argv=None):
     parser.add_argument("--top-p", type=float, default=0.9)
     parser.add_argument("--timeout", type=float, default=60)
     parser.add_argument("--resume", default="", help="session ID or latest")
+    parser.add_argument("--max-depth", type=int, default=1, help="maximum delegation depth")
     args = parser.parse_args(argv)
     load_env_file(args.env_file)
     workspace = WorkspaceContext.build(args.cwd)
     store = SessionStore(Path(workspace.repo_root) / ".mini-coding-agent" / "sessions")
     client = build_model_client(args)
-    common = {"max_steps": args.max_steps, "approval": args.approval, "max_new_tokens": args.max_new_tokens}
+    common = {"max_steps": args.max_steps, "approval": args.approval, "max_new_tokens": args.max_new_tokens, "max_depth": args.max_depth}
     if args.resume:
         session_id = store.latest() if args.resume == "latest" else args.resume
         if not session_id:
@@ -39,8 +40,12 @@ def main(argv=None):
     else:
         agent = MyAgent(client, workspace.repo_root, workspace=workspace, session_store=store, **common)
     if args.message:
-        print(f"<final>{agent.ask(args.message)}</final>")
+        try:
+            print(f"<final>{agent.ask(args.message)}</final>")
+        except RuntimeError as exc:
+            print(f"error: {exc}")
         return
+    print("MyAgent interactive mode. Type /help for commands, /exit to quit.")
     while True:
         try:
             message = input("my-agent> ").strip()
@@ -62,6 +67,14 @@ def main(argv=None):
                 print(f"<final>{agent.ask(message)}</final>")
             except RuntimeError as exc:
                 print(f"error: {exc}")
+
+
+def main(argv=None):
+    """运行 CLI 并将顶层模型错误显示为文本；参数为可选 argv，返回 None。"""
+    try:
+        run(argv)
+    except RuntimeError as exc:
+        print(f"error: {exc}")
 
 
 if __name__ == "__main__":

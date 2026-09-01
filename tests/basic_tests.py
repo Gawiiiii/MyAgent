@@ -7,7 +7,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from model_client import OpenAICompatibleModelClient, OllamaModelClient, load_env_file
+from model_client import OllamaModelClient, OpenAICompatibleModelClient, load_env_file
 from my_agent import MyAgent
 from parser import parse
 from tools import search
@@ -93,7 +93,7 @@ class CurrentVersionTests(unittest.TestCase):
     def test_tool_table_contains_stage2_tools(self):
         with TemporaryDirectory() as directory:
             agent = MyAgent(object(), directory, approval="auto")
-            self.assertEqual(set(agent.tools), {"list_files", "read_file", "search", "write_file", "patch_file", "run_shell"})
+            self.assertEqual(set(agent.tools), {"list_files", "read_file", "search", "write_file", "patch_file", "run_shell", "delegate"})
             self.assertEqual(parse('<tool>{"name":"write_file","args":{}}</tool>')["kind"], "tool")
             self.assertIn("missing argument", agent.run_tool("write_file", {}))
 

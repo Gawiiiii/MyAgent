@@ -24,11 +24,14 @@ def middle(text, limit):
 def build_prefix(agent):
     """构造固定系统提示；参数为 MyAgent，返回稳定前缀 str。"""
     tools = "\n".join(f"- {name}: {item['description']} (args: {item['schema']})" for name, item in agent.tools.items())
-    return "\n".join([
+    rules = [
         "You are a coding agent. Work only with the workspace below.",
         "Available tools:", tools,
         'Respond with <tool>{"name":...,"args":{...}}</tool>, XML write/patch tags, or <final>answer</final>.',
-    ])
+    ]
+    if agent.read_only:
+        rules.insert(1, "You are a read-only delegated agent. Only inspect files; never write or run commands.")
+    return "\n".join(rules)
 
 
 def memory_text(session):

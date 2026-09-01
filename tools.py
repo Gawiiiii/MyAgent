@@ -99,6 +99,7 @@ def validate_tool(root, name, args):
     required = {
         "read_file": ("path",), "search": ("pattern",), "write_file": ("path", "content"),
         "patch_file": ("path", "old_text", "new_text"), "run_shell": ("command",),
+        "delegate": ("task",),
     }.get(name, ())
     for key in required:
         if key not in args:
@@ -117,16 +118,22 @@ def validate_tool(root, name, args):
             raise ValueError("command must not be empty")
         if not 1 <= timeout <= 120:
             raise ValueError("timeout must be between 1 and 120 seconds")
+    if name == "delegate" and (not isinstance(args["task"], str) or not args["task"].strip()):
+        raise ValueError("task must not be empty")
     return args
 
 
 def build_tools(agent):
     """构造工具定义表；参数为 MyAgent 实例，返回含 schema/risky/description/run 的 dict。"""
-    return {
+    tools = {
         "list_files": {"schema": {}, "risky": False, "description": "list workspace files", "run": list_files},
         "read_file": {"schema": {"path": "str", "start": "int?", "end": "int?"}, "risky": False, "description": "read UTF-8 lines", "run": read_file},
         "search": {"schema": {"pattern": "str"}, "risky": False, "description": "search text recursively", "run": search},
         "write_file": {"schema": {"path": "str", "content": "str"}, "risky": True, "description": "create or replace a file", "run": write_file},
         "patch_file": {"schema": {"path": "str", "old_text": "str", "new_text": "str"}, "risky": True, "description": "replace one exact text occurrence", "run": patch_file},
         "run_shell": {"schema": {"command": "str", "timeout": "int?"}, "risky": True, "description": "run a shell command", "run": run_shell},
+        "delegate": {"schema": {"task": "str"}, "risky": False, "description": "delegate a read-only analysis task", "run": lambda _root, args: agent.tool_delegate(args)},
     }
+    if agent.read_only:
+        return {name: tools[name] for name in ("list_files", "read_file", "search")}
+    return tools

@@ -3,7 +3,6 @@ from tempfile import TemporaryDirectory
 
 from context import clip, history_text, middle
 from my_agent import MyAgent
-from parser import parse
 
 
 class SequenceClient:

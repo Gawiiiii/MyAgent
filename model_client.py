@@ -98,6 +98,21 @@ class OllamaModelClient:
         return data.get("response", "")
 
 
+class FakeModelClient:
+    """按顺序返回预设文本的测试客户端。"""
+
+    def __init__(self, outputs):
+        """初始化输出队列；参数为可迭代的 str 输出，返回 None。"""
+        self.outputs = iter(outputs)
+
+    def complete(self, prompt, max_new_tokens):
+        """返回下一条预设响应；参数为 Prompt 和 token 上限，返回 str。"""
+        try:
+            return next(self.outputs)
+        except StopIteration as exc:
+            raise RuntimeError("fake model has no more outputs") from exc
+
+
 def build_model_client(args):
     """按 CLI 配置构造客户端；参数为 argparse Namespace，返回兼容客户端对象。"""
     if args.provider == "ollama":

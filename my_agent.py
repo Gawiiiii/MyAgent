@@ -1,15 +1,15 @@
-from pathlib import Path
 from datetime import datetime, timezone
+from pathlib import Path
 
 from context import build_prompt
 from parser import parse
+from session import SessionStore
 from tools import build_tools, validate_tool
 from workspace import WorkspaceContext
-from session import SessionStore
 
 
 class MyAgent:
-    def __init__(self, model_client, root, max_steps=6, approval="ask", max_new_tokens=512, workspace=None, session_store=None, session=None):
+    def __init__(self, model_client, root, max_steps=6, approval="ask", max_new_tokens=512, workspace=None, session_store=None, session=None, depth=0, max_depth=1, read_only=False):
         """初始化 Agent；参数为模型客户端、根目录、运行配置及可选上下文会话，返回 None。"""
         self.model_client = model_client
         self.workspace = workspace or WorkspaceContext.build(root)
@@ -17,6 +17,9 @@ class MyAgent:
         self.max_steps = max_steps
         self.approval = approval
         self.max_new_tokens = max_new_tokens
+        self.depth = depth
+        self.max_depth = max_depth
+        self.read_only = read_only
         self.tools = build_tools(self)
         self.session_store = session_store or SessionStore(self.root / ".mini-coding-agent" / "sessions")
         self.session = session or {"id": datetime.now().strftime("%Y%m%d-%H%M%S-%f"), "created_at": datetime.now(timezone.utc).isoformat(), "workspace_root": str(self.root), "history": [], "memory": {"task": "", "files": [], "notes": []}}
@@ -85,12 +88,29 @@ class MyAgent:
         if name not in self.tools:
             return f"error: unknown tool {name!r}"
         try:
+            if self.read_only and name not in {"list_files", "read_file", "search"}:
+                return f"error: read-only agent cannot use {name}"
             validate_tool(self.root, name, args)
             if not self.approve(name, args):
                 return f"error: approval denied for {name}"
             return self.tools[name]["run"](self.root, args)
         except (KeyError, ValueError, TypeError, OSError) as exc:
             return f"error: {exc}"
+
+    def tool_delegate(self, args):
+        """运行受限只读子 Agent；参数为含 task 的 dict，返回 delegate_result 文本。"""
+        if not isinstance(args, dict) or not isinstance(args.get("task"), str) or not args["task"].strip():
+            raise ValueError("task must not be empty")
+        if self.depth >= self.max_depth:
+            raise ValueError("maximum delegation depth reached")
+        child = MyAgent(
+            self.model_client, self.root, max_steps=self.max_steps,
+            approval="never", max_new_tokens=self.max_new_tokens,
+            workspace=self.workspace, session_store=self.session_store,
+            depth=self.depth + 1, max_depth=self.max_depth, read_only=True,
+        )
+        answer = child.ask(args["task"])
+        return f"delegate_result: {answer}"
 
     def record(self, item):
         """追加并立即保存历史记录；参数为 dict 记录项，返回 None。"""

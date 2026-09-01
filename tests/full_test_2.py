@@ -5,13 +5,11 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from context import history_text
 from model_client import OpenAICompatibleModelClient, load_env_file
 from my_agent import MyAgent
 from parser import parse
 from session import SessionStore
 from workspace import WorkspaceContext
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 HAS_CONFIGURATION = bool(os.environ.get("DEEPSEEK_API_KEY")) or (PROJECT_ROOT / ".env").exists()
