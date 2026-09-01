@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -9,7 +10,7 @@ from workspace import WorkspaceContext
 
 
 class MyAgent:
-    def __init__(self, model_client, root, max_steps=6, approval="ask", max_new_tokens=512, workspace=None, session_store=None, session=None, depth=0, max_depth=1, read_only=False):
+    def __init__(self, model_client, root, max_steps=6, approval="ask", max_new_tokens=512, workspace=None, session_store=None, session=None, depth=0, max_depth=1, read_only=False, max_parallel_delegates=3):
         """初始化 Agent；参数为模型客户端、根目录、运行配置及可选上下文会话，返回 None。"""
         self.model_client = model_client
         self.workspace = workspace or WorkspaceContext.build(root)
@@ -20,6 +21,9 @@ class MyAgent:
         self.depth = depth
         self.max_depth = max_depth
         self.read_only = read_only
+        if not 1 <= max_parallel_delegates <= 8:
+            raise ValueError("max_parallel_delegates must be between 1 and 8")
+        self.max_parallel_delegates = max_parallel_delegates
         self.tools = build_tools(self)
         self.session_store = session_store or SessionStore(self.root / ".mini-coding-agent" / "sessions")
         self.session = session or {"id": datetime.now().strftime("%Y%m%d-%H%M%S-%f"), "created_at": datetime.now(timezone.utc).isoformat(), "workspace_root": str(self.root), "history": [], "memory": {"task": "", "files": [], "notes": []}}
@@ -103,14 +107,41 @@ class MyAgent:
             raise ValueError("task must not be empty")
         if self.depth >= self.max_depth:
             raise ValueError("maximum delegation depth reached")
-        child = MyAgent(
+        child = self._build_read_only_child()
+        answer = child.ask(args["task"])
+        return f"delegate_result: {answer}"
+
+    def _build_read_only_child(self):
+        """创建共享客户端和工作区的只读子 Agent；参数为 self，返回 MyAgent。"""
+        return MyAgent(
             self.model_client, self.root, max_steps=self.max_steps,
             approval="never", max_new_tokens=self.max_new_tokens,
             workspace=self.workspace, session_store=self.session_store,
             depth=self.depth + 1, max_depth=self.max_depth, read_only=True,
+            max_parallel_delegates=self.max_parallel_delegates,
         )
-        answer = child.ask(args["task"])
-        return f"delegate_result: {answer}"
+
+    def tool_delegate_parallel(self, args):
+        """并行执行多个只读委派任务；参数为含 tasks 列表的 dict，返回有序结果文本。"""
+        tasks = args.get("tasks") if isinstance(args, dict) else None
+        if not isinstance(tasks, list) or not tasks:
+            raise ValueError("tasks must be a non-empty list")
+        if len(tasks) > self.max_parallel_delegates:
+            raise ValueError(f"tasks must contain at most {self.max_parallel_delegates} items")
+        if self.depth >= self.max_depth:
+            raise ValueError("maximum delegation depth reached")
+
+        def execute(task):
+            if not isinstance(task, str) or not task.strip():
+                return "error: task must not be empty"
+            try:
+                return self._build_read_only_child().ask(task)
+            except RuntimeError as exc:
+                return f"error: {exc}"
+
+        with ThreadPoolExecutor(max_workers=min(len(tasks), self.max_parallel_delegates)) as executor:
+            results = list(executor.map(execute, tasks))
+        return "\n".join(f"delegate_result[{index}]: {result}" for index, result in enumerate(results, 1))
 
     def record(self, item):
         """追加并立即保存历史记录；参数为 dict 记录项，返回 None。"""

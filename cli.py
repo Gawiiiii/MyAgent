@@ -26,12 +26,13 @@ def run(argv=None):
     parser.add_argument("--timeout", type=float, default=60)
     parser.add_argument("--resume", default="", help="session ID or latest")
     parser.add_argument("--max-depth", type=int, default=1, help="maximum delegation depth")
+    parser.add_argument("--max-parallel-delegates", type=int, default=3, help="maximum parallel read-only delegates (1-8)")
     args = parser.parse_args(argv)
     load_env_file(args.env_file)
     workspace = WorkspaceContext.build(args.cwd)
     store = SessionStore(Path(workspace.repo_root) / ".mini-coding-agent" / "sessions")
     client = build_model_client(args)
-    common = {"max_steps": args.max_steps, "approval": args.approval, "max_new_tokens": args.max_new_tokens, "max_depth": args.max_depth}
+    common = {"max_steps": args.max_steps, "approval": args.approval, "max_new_tokens": args.max_new_tokens, "max_depth": args.max_depth, "max_parallel_delegates": args.max_parallel_delegates}
     if args.resume:
         session_id = store.latest() if args.resume == "latest" else args.resume
         if not session_id:

@@ -100,6 +100,7 @@ def validate_tool(root, name, args):
         "read_file": ("path",), "search": ("pattern",), "write_file": ("path", "content"),
         "patch_file": ("path", "old_text", "new_text"), "run_shell": ("command",),
         "delegate": ("task",),
+        "delegate_parallel": ("tasks",),
     }.get(name, ())
     for key in required:
         if key not in args:
@@ -120,6 +121,12 @@ def validate_tool(root, name, args):
             raise ValueError("timeout must be between 1 and 120 seconds")
     if name == "delegate" and (not isinstance(args["task"], str) or not args["task"].strip()):
         raise ValueError("task must not be empty")
+    if name == "delegate_parallel":
+        tasks = args["tasks"]
+        if not isinstance(tasks, list) or not tasks:
+            raise ValueError("tasks must be a non-empty list")
+        if any(not isinstance(task, str) or not task.strip() for task in tasks):
+            raise ValueError("task must not be empty")
     return args
 
 
@@ -133,6 +140,7 @@ def build_tools(agent):
         "patch_file": {"schema": {"path": "str", "old_text": "str", "new_text": "str"}, "risky": True, "description": "replace one exact text occurrence", "run": patch_file},
         "run_shell": {"schema": {"command": "str", "timeout": "int?"}, "risky": True, "description": "run a shell command", "run": run_shell},
         "delegate": {"schema": {"task": "str"}, "risky": False, "description": "delegate a read-only analysis task", "run": lambda _root, args: agent.tool_delegate(args)},
+        "delegate_parallel": {"schema": {"tasks": "list[str]"}, "risky": False, "description": "delegate bounded read-only analysis tasks in parallel", "run": lambda _root, args: agent.tool_delegate_parallel(args)},
     }
     if agent.read_only:
         return {name: tools[name] for name in ("list_files", "read_file", "search")}

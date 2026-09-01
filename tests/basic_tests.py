@@ -93,7 +93,7 @@ class CurrentVersionTests(unittest.TestCase):
     def test_tool_table_contains_stage2_tools(self):
         with TemporaryDirectory() as directory:
             agent = MyAgent(object(), directory, approval="auto")
-            self.assertEqual(set(agent.tools), {"list_files", "read_file", "search", "write_file", "patch_file", "run_shell", "delegate"})
+            self.assertEqual(set(agent.tools), {"list_files", "read_file", "search", "write_file", "patch_file", "run_shell", "delegate", "delegate_parallel"})
             self.assertEqual(parse('<tool>{"name":"write_file","args":{}}</tool>')["kind"], "tool")
             self.assertIn("missing argument", agent.run_tool("write_file", {}))
 
