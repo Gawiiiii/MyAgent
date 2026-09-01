@@ -12,6 +12,7 @@ def clip(text, limit=4000):
 
 def middle(text, limit):
     """保留文本首尾内容；参数为文本 str 和 int 上限，返回压缩后的 str。"""
+    """用于在对话历史中对较早的工具输出进行压缩，保留首尾内容以节省历史长度。"""
     text = str(text)
     if len(text) <= limit:
         return text
@@ -42,6 +43,7 @@ def memory_text(session):
 
 def history_text(history):
     """压缩并格式化会话历史；参数为 dict 列表，返回受限长度历史 str。"""
+    """最近的六条记录完整保存，更早的工具调用历史会用middle()压缩到500字符以内，连续的重复读取文件操作会被省略，但是写入/修改文件操作会重置连续读取的省略逻辑。"""
     rendered, previous_read = [], None
     recent_start = max(0, len(history) - 6)
     for index, item in enumerate(history):

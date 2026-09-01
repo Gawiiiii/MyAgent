@@ -37,6 +37,7 @@ class WorkspaceContext:
 
     def text(self):
         """格式化工作区上下文；参数为 self，返回可放入 Prompt 的 str。"""
+        """返回的str结构：当前工作目录cwd+仓库根目录+当前分支+git状态+最近提交+项目文档摘要"""
         commits = "\n".join(f"- {item}" for item in self.recent_commits) or "- none"
         docs = "\n".join(f"- {name}\n{text}" for name, text in self.project_docs.items()) or "- none"
         return f"Workspace:\n- cwd: {self.cwd}\n- repo_root: {self.repo_root}\n- branch: {self.branch}\n- status:\n{self.status}\n- recent_commits:\n{commits}\n- project_docs:\n{docs}"
