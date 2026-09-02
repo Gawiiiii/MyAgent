@@ -1,10 +1,46 @@
 import argparse
 from pathlib import Path
 
+from changes import format_diff
 from model_client import build_model_client, load_env_file
 from my_agent import MyAgent
 from session import SessionStore
 from workspace import WorkspaceContext
+
+HELP_TEXT = """Available commands:
+/help                 Show this detailed command reference.
+/memory               Show the current task, files, and notes in working memory.
+/session              Show the current session JSON file path.
+/diff                 Show all active changes and their unified diffs.
+/rollback [id]        Roll back the latest change, or the change with the given ID.
+/audit [N]            Show the latest N audit events (default: 20).
+/audit-clear          Delete all audit events for the current session.
+/reset                Start a new empty session in the same workspace.
+/exit                 Exit interactive mode.
+/quit                 Exit interactive mode."""
+
+
+def _one_line_task(session, limit=80):
+    """生成会话任务摘要；参数为会话 dict 和长度，返回单行 str。"""
+    task = str(session.get("memory", {}).get("task", "")).replace("\n", " ").strip()
+    task = " ".join(task.split()) or "(no task)"
+    return task if len(task) <= limit else task[: limit - 3] + "..."
+
+
+def select_session(store, parser):
+    """显示最近会话并读取选择；参数为存储器和解析器，返回会话 ID str。"""
+    sessions = store.recent(5)
+    if not sessions:
+        parser.error("no session available to resume")
+    print("Recent sessions:")
+    for index, session in enumerate(sessions, 1):
+        print(f"{index}. {session['id']}  {_one_line_task(session)}")
+    choice = input(f"Select 1-{len(sessions)} or enter a displayed session ID: ").strip()
+    if choice.isdigit() and 1 <= int(choice) <= len(sessions):
+        return sessions[int(choice) - 1]["id"]
+    if any(session["id"] == choice for session in sessions):
+        return choice
+    parser.error("invalid session selection")
 
 
 def run(argv=None):
@@ -25,23 +61,28 @@ def run(argv=None):
     parser.add_argument("--temperature", type=float, default=0.2)
     parser.add_argument("--top-p", type=float, default=0.9)
     parser.add_argument("--timeout", type=float, default=60)
-    parser.add_argument("--resume", default="", help="session ID or latest")
+    parser.add_argument("--resume", nargs="?", const="select", default="", help="session ID, latest, or omit the value to choose from five recent sessions")
     parser.add_argument("--max-depth", type=int, default=1, help="maximum delegation depth")
     parser.add_argument("--max-parallel-delegates", type=int, default=3, help="maximum parallel read-only delegates (1-8)")
     args = parser.parse_args(argv)
     load_env_file(args.env_file)
     workspace = WorkspaceContext.build(args.cwd)
     store = SessionStore(Path(workspace.cwd) / ".mini-coding-agent" / "sessions")
-    client = build_model_client(args)
     def status(message):
         text = f"{message:<80}" if message else " " * 80
         print(f"\r{text}\r" if not message else f"\r{text}", end="", flush=True)
 
     common = {"max_steps": args.max_steps, "approval": args.approval, "max_new_tokens": args.max_new_tokens, "max_depth": args.max_depth, "max_parallel_delegates": args.max_parallel_delegates, "unlimited_tool_calls": args.unlimited_tool_calls, "status": status}
+    session_id = ""
     if args.resume:
-        session_id = store.latest() if args.resume == "latest" else args.resume
+        if args.resume == "select":
+            session_id = select_session(store, parser)
+        else:
+            session_id = store.latest() if args.resume == "latest" else args.resume
         if not session_id:
             parser.error("no session available to resume")
+    client = build_model_client(args)
+    if session_id:
         agent = MyAgent.from_session(client, workspace, store, session_id, **common)
     else:
         agent = MyAgent(client, workspace.cwd, workspace=workspace, session_store=store, **common)
@@ -60,7 +101,7 @@ def run(argv=None):
         if message in {"/exit", "/quit"}:
             break
         if message == "/help":
-            print("/help /memory /session /diff /rollback [id] /audit [N] /audit-clear /reset /exit /quit")
+            print(HELP_TEXT)
         elif message == "/memory":
             print(agent.session.get("memory", {}))
         elif message == "/session":
@@ -70,7 +111,7 @@ def run(argv=None):
                 print("no changes")
             else:
                 for change in agent.changes:
-                    print(f"[{change['id']}] {change['operation']} {change['path']}\n{change['diff']}")
+                    print(f"[{change['id']}] {change['operation']} {change['path']}\n{format_diff(change['diff'])}")
         elif message.startswith("/rollback"):
             parts = message.split()
             if len(parts) > 2:

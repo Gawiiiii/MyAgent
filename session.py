@@ -28,3 +28,10 @@ class SessionStore:
         """查找最近会话；参数为 self，返回 str 会话 ID 或 None。"""
         files = sorted(self.root.glob("*.json"), key=lambda item: item.stat().st_mtime)
         return files[-1].stem if files else None
+
+    def recent(self, limit=5):
+        """读取最近会话；参数为最大数量 int，返回由新到旧的会话 dict 列表。"""
+        if limit < 1:
+            raise ValueError("limit must be positive")
+        files = sorted(self.root.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True)
+        return [json.loads(item.read_text(encoding="utf-8")) for item in files[:limit]]

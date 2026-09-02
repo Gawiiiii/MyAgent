@@ -6,6 +6,7 @@ from audit import AuditLog
 from changes import (
     ChangeRecord,
     apply_change,
+    format_diff,
     preview_change,
     rollback_change,
     timestamp,
@@ -148,10 +149,11 @@ class MyAgent:
             return False
         if preview:
             self._status("")
-            print(preview["diff"])
+            print(format_diff(preview["diff"]))
         else:
             self._status("")
-        answer = input(f"Allow {name} with {args}? [y/N] ").strip().lower()
+        print(f"Allow {name} with {args}?")
+        answer = input("【y/n】 ").strip().lower()
         return answer in {"y", "yes"}
 
     def run_tool(self, name, args):

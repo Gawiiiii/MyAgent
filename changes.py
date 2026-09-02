@@ -2,6 +2,14 @@ from datetime import datetime, timezone
 from difflib import unified_diff
 from pathlib import Path
 
+DIFF_SEPARATOR = "#" * 80
+
+
+def format_diff(diff):
+    """格式化终端 diff 展示；参数为统一 diff str，返回醒目标记后的文本。"""
+    text = str(diff or "").rstrip()
+    return f"{DIFF_SEPARATOR}\nDIFF\n{DIFF_SEPARATOR}\n{text}\n{DIFF_SEPARATOR}"
+
 
 class ChangeRecord:
     """表示一次可回滚的单文件文本变更。"""
