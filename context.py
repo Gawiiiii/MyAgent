@@ -29,6 +29,7 @@ def build_prefix(agent):
         "You are a coding agent. Work only with the workspace below.",
         "Available tools:", tools,
         'Respond with <tool>{"name":...,"args":{...}}</tool>, XML write/patch tags, or <final>answer</final>.',
+        "For read_file, use retry=true only when retrying the same read after that read failed. After a successful read, file change, or command, read normally without retry.",
     ]
     if agent.read_only:
         rules.insert(1, "You are a read-only delegated agent. Only inspect files; never write or run commands.")

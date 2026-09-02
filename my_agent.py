@@ -1,4 +1,3 @@
-import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,14 +18,16 @@ from workspace import WorkspaceContext
 
 
 class MyAgent:
-    def __init__(self, model_client, root, max_steps=6, approval="ask", max_new_tokens=4096, workspace=None, session_store=None, session=None, depth=0, max_depth=1, read_only=False, max_parallel_delegates=3, persist_session=True, audit_log=None):
+    def __init__(self, model_client, root, max_steps=6, approval="ask", max_new_tokens=4096, workspace=None, session_store=None, session=None, depth=0, max_depth=1, read_only=False, max_parallel_delegates=3, persist_session=True, audit_log=None, unlimited_tool_calls=True, status=None):
         """初始化 Agent；参数为模型客户端、根目录、运行配置及可选上下文会话，返回 None。"""
         self.model_client = model_client
         self.workspace = workspace or WorkspaceContext.build(root)
-        self.root = Path(self.workspace.repo_root).resolve()
+        self.root = Path(self.workspace.cwd).resolve()
         self.max_steps = max_steps
         self.approval = approval
         self.max_new_tokens = max_new_tokens
+        self.unlimited_tool_calls = unlimited_tool_calls
+        self.status = status
         self.depth = depth
         self.max_depth = max_depth
         self.read_only = read_only
@@ -62,12 +63,13 @@ class MyAgent:
         self.record({"role": "user", "content": user_message})
         self.session["memory"]["task"] = user_message
         self._save_session()
-        observations, attempts, tool_steps, empty_responses = "", 0, 0, 0
-        tool_calls = set()
+        observations, attempts, tool_steps, empty_responses, format_errors = "", 0, 0, 0, 0
+        retry_reads, last_retry_path = 0, None
         max_attempts = max(self.max_steps * 3, self.max_steps + 4)
-        while attempts < max_attempts:
+        while True:
             attempts += 1
             prompt = self.prompt(user_message, observations)
+            self._status("Requesting LLM...")
             self.audit_log.append("model_request", attempt=attempts, max_new_tokens=self.max_new_tokens)
             try:
                 raw = self.model_client.complete(prompt, self.max_new_tokens)
@@ -79,10 +81,12 @@ class MyAgent:
             result = parse(raw)
             self.audit_log.append("parse_result", kind=result.get("kind"), error=result.get("error", ""))
             if result["kind"] == "final":
+                self._status("")
                 self.record({"role": "assistant", "content": result["content"]})
                 self.audit_log.append("final_answer", content=result["content"])
                 return result["content"]
             if result["kind"] == "retry":
+                format_errors += 1
                 self.record({"role": "assistant", "content": f"format error: {result['error']}"})
                 if result["error"] == "empty response":
                     empty_responses += 1
@@ -90,24 +94,34 @@ class MyAgent:
                         stop = "Stopped after 3 consecutive empty model responses. Check the model output limit and provider response metadata."
                         self.record({"role": "assistant", "content": stop})
                         self.audit_log.append("final_answer", content=stop)
+                        self._status("")
                         return stop
                 else:
                     empty_responses = 0
+                if format_errors >= max_attempts:
+                    break
                 observations += f"\nModel format error: {result['error']}. Retry using the required tag."
                 continue
             empty_responses = 0
+            format_errors = 0
             name, args = result["name"], result["args"]
-            if tool_steps >= self.max_steps:
+            if not self.unlimited_tool_calls and tool_steps >= self.max_steps:
                 break
             tool_steps += 1
-            if self.repeated_tool_call(name, args, tool_calls):
-                output = f"error: repeated tool call for {name} with identical arguments"
+            if name == "read_file" and args.get("retry") is True:
+                retry_path = args.get("path")
+                retry_reads = retry_reads + 1 if retry_path == last_retry_path else 1
+                last_retry_path = retry_path
+            else:
+                retry_reads, last_retry_path = 0, None
+            if retry_reads > 3:
+                output = f"error: repeated retry read limit reached for {args.get('path')}"
                 self.note_tool(name, args, output)
                 observations += f"\n{name} result:\n{output}"
-                if tool_steps >= self.max_steps:
+                if not self.unlimited_tool_calls and tool_steps >= self.max_steps:
                     break
                 continue
-            tool_calls.add(self.tool_call_key(name, args))
+            self._status(f"Tool calling {name}...")
             self.audit_log.append("tool_start", name=name, args=args)
             output = self.run_tool(name, args)
             self.audit_log.append("tool_error" if output.startswith("error:") else "tool_result", name=name, result=output)
@@ -116,16 +130,13 @@ class MyAgent:
         stop = f"Stopped after {attempts} attempts and {tool_steps} tool steps without a final answer."
         self.record({"role": "assistant", "content": stop})
         self.audit_log.append("final_answer", content=stop)
+        self._status("")
         return stop
 
-    @staticmethod
-    def tool_call_key(name, args):
-        """生成工具调用比较键；参数为名称和参数字典，返回规范字符串。"""
-        return f"{name}:{json.dumps(args, ensure_ascii=False, sort_keys=True)}"
-
-    def repeated_tool_call(self, name, args, tool_calls=None):
-        """判断当前 ask 内工具调用是否重复；参数为名称、参数和调用集合，返回 bool。"""
-        return self.tool_call_key(name, args) in (tool_calls or set())
+    def _status(self, message):
+        """更新单行执行状态；参数为状态文本，返回 None。"""
+        if self.status:
+            self.status(message)
 
     def approve(self, name, args, preview=""):
         """决定风险工具是否执行；参数为工具名 str 和参数 dict，返回允许执行的 bool。"""
@@ -136,7 +147,10 @@ class MyAgent:
         if self.approval == "never":
             return False
         if preview:
+            self._status("")
             print(preview["diff"])
+        else:
+            self._status("")
         answer = input(f"Allow {name} with {args}? [y/N] ").strip().lower()
         return answer in {"y", "yes"}
 
@@ -218,7 +232,8 @@ class MyAgent:
             workspace=self.workspace, session_store=self.session_store,
             depth=self.depth + 1, max_depth=self.max_depth, read_only=True,
             max_parallel_delegates=self.max_parallel_delegates, persist_session=False,
-            audit_log=self.audit_log,
+            audit_log=self.audit_log, unlimited_tool_calls=self.unlimited_tool_calls,
+            status=self.status,
         )
 
     def tool_delegate_parallel(self, args):

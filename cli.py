@@ -11,14 +11,15 @@ def run(argv=None):
     """解析命令行并运行 Agent；参数为可选 argv 列表，返回 None。"""
     parser = argparse.ArgumentParser(description="Minimal local MyAgent")
     parser.add_argument("message", nargs="?", default="")
-    parser.add_argument("--cwd", default=".")
+    parser.add_argument("--cwd", default="./demo")
     parser.add_argument("--provider", choices=["openai-compatible", "ollama"], default="openai-compatible")
     parser.add_argument("--base-url", default="https://api.deepseek.com")
     parser.add_argument("--api-key-env", default="DEEPSEEK_API_KEY")
     parser.add_argument("--env-file", default=".env", help="file containing KEY=VALUE settings")
     parser.add_argument("--model", default="deepseek-v4-flash")
     parser.add_argument("--host", default="http://127.0.0.1:11434")
-    parser.add_argument("--max-steps", type=int, default=6)
+    parser.add_argument("--max-steps", type=int, default=12)
+    parser.add_argument("--unlimited-tool-calls", action=argparse.BooleanOptionalAction, default=True, help="allow unlimited tool calls")
     parser.add_argument("--max-new-tokens", type=int, default=4096)
     parser.add_argument("--approval", choices=["ask", "auto", "never"], default="ask")
     parser.add_argument("--temperature", type=float, default=0.2)
@@ -30,16 +31,20 @@ def run(argv=None):
     args = parser.parse_args(argv)
     load_env_file(args.env_file)
     workspace = WorkspaceContext.build(args.cwd)
-    store = SessionStore(Path(workspace.repo_root) / ".mini-coding-agent" / "sessions")
+    store = SessionStore(Path(workspace.cwd) / ".mini-coding-agent" / "sessions")
     client = build_model_client(args)
-    common = {"max_steps": args.max_steps, "approval": args.approval, "max_new_tokens": args.max_new_tokens, "max_depth": args.max_depth, "max_parallel_delegates": args.max_parallel_delegates}
+    def status(message):
+        text = f"{message:<80}" if message else " " * 80
+        print(f"\r{text}\r" if not message else f"\r{text}", end="", flush=True)
+
+    common = {"max_steps": args.max_steps, "approval": args.approval, "max_new_tokens": args.max_new_tokens, "max_depth": args.max_depth, "max_parallel_delegates": args.max_parallel_delegates, "unlimited_tool_calls": args.unlimited_tool_calls, "status": status}
     if args.resume:
         session_id = store.latest() if args.resume == "latest" else args.resume
         if not session_id:
             parser.error("no session available to resume")
         agent = MyAgent.from_session(client, workspace, store, session_id, **common)
     else:
-        agent = MyAgent(client, workspace.repo_root, workspace=workspace, session_store=store, **common)
+        agent = MyAgent(client, workspace.cwd, workspace=workspace, session_store=store, **common)
     if args.message:
         try:
             print(f"<final>{agent.ask(args.message)}</final>")

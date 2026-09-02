@@ -25,15 +25,15 @@ class Stage4Tests(unittest.TestCase):
             agent = MyAgent(client, directory, max_steps=1)
             self.assertEqual(agent.ask("task"), "recovered")
 
-    def test_repeated_tool_call_returns_error_and_stops(self):
-        """验证重复工具调用反馈错误并最终停止；无参数，返回 None。"""
+    def test_repeated_retry_read_returns_error_and_stops(self):
+        """验证连续 retry 读取达到上限后反馈错误；无参数，返回 None。"""
         with TemporaryDirectory() as directory:
-            call = '<tool>{"name":"list_files","args":{}}</tool>'
-            client = SequenceClient([call, call, call])
-            agent = MyAgent(client, directory, max_steps=3)
+            call = '<tool>{"name":"read_file","args":{"path":"missing.py","retry":true}}</tool>'
+            client = SequenceClient([call, call, call, call, "<final>stopped retrying</final>"])
+            agent = MyAgent(client, directory)
             answer = agent.ask("repeat")
-            self.assertIn("Stopped after", answer)
-            self.assertIn("repeated tool call", "\n".join(item["content"] for item in agent.session["history"] if item["role"] == "tool"))
+            self.assertEqual(answer, "stopped retrying")
+            self.assertIn("repeated retry read limit", "\n".join(item["content"] for item in agent.session["history"] if item["role"] == "tool"))
 
     def test_context_limits_old_output_and_deduplicates_reads(self):
         """验证历史长度限制、旧输出压缩和读取去重；无参数，返回 None。"""

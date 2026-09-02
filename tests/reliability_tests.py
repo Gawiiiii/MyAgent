@@ -55,6 +55,24 @@ class ReliabilityTests(unittest.TestCase):
             agent = MyAgent(FakeModelClient([call, "<final>done</final>"]), directory, max_steps=1)
             self.assertEqual(agent.ask("task"), "done")
 
+    def test_unlimited_tool_calls_is_default_and_can_be_disabled(self):
+        with TemporaryDirectory() as directory:
+            calls = ['<tool>{"name":"list_files","args":{}}</tool>'] * 3
+            unlimited = MyAgent(FakeModelClient([*calls, "<final>done</final>"]), directory, max_steps=1)
+            self.assertEqual(unlimited.ask("task"), "done")
+        with TemporaryDirectory() as directory:
+            limited = MyAgent(FakeModelClient([*calls, "<final>unused</final>"]), directory, max_steps=1, unlimited_tool_calls=False)
+            self.assertIn("Stopped after", limited.ask("task"))
+
+    def test_normal_reread_is_allowed_and_retry_reads_are_bounded(self):
+        with TemporaryDirectory() as directory:
+            Path(directory, "a.txt").write_text("content", encoding="utf-8")
+            normal = '<tool>{"name":"read_file","args":{"path":"a.txt"}}</tool>'
+            agent = MyAgent(FakeModelClient([normal, normal, "<final>done</final>"]), directory)
+            self.assertEqual(agent.ask("task"), "done")
+            contents = [item["content"] for item in agent.session["history"] if item["role"] == "tool"]
+            self.assertEqual(contents.count("1: content"), 2)
+
     def test_openai_metadata_is_extracted_and_audited(self):
         server = HTTPServer(("127.0.0.1", 0), MetadataHandler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)

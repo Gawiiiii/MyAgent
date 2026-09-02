@@ -123,6 +123,8 @@ def validate_tool(root, name, args):
         start, end = int(args.get("start", 1)), int(args.get("end", 10**9))
         if start < 1 or end < start:
             raise ValueError("line range is invalid")
+        if "retry" in args and not isinstance(args["retry"], bool):
+            raise ValueError("retry must be boolean")
     if name == "search" and not args["pattern"]:
         raise ValueError("pattern must not be empty")
     if name == "run_shell":
@@ -146,7 +148,7 @@ def build_tools(agent):
     """构造工具定义表；参数为 MyAgent 实例，返回含 schema/risky/description/run 的 dict。"""
     tools = {
         "list_files": {"schema": {}, "risky": False, "description": "list workspace files", "run": list_files},
-        "read_file": {"schema": {"path": "str", "start": "int?", "end": "int?"}, "risky": False, "description": "read UTF-8 lines", "run": read_file},
+        "read_file": {"schema": {"path": "str", "start": "int?", "end": "int?", "retry": "bool?"}, "risky": False, "description": "read UTF-8 lines; retry=true only after a failed read", "run": read_file},
         "search": {"schema": {"pattern": "str"}, "risky": False, "description": "search text recursively", "run": search},
         "write_file": {"schema": {"path": "str", "content": "str"}, "risky": True, "description": "create or replace a file", "run": write_file},
         "patch_file": {"schema": {"path": "str", "old_text": "str", "new_text": "str"}, "risky": True, "description": "replace one exact text occurrence", "run": patch_file},
