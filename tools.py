@@ -18,6 +18,8 @@ def list_files(root, args):
     """列出工作区一级内容；参数为 Path 根目录和 dict 参数，返回 str 文件清单。"""
     entries = []
     for item in sorted(Path(root).iterdir(), key=lambda item: item.name):
+        if item.name == ".mini-coding-agent":
+            continue
         entries.append(item.name + ("/" if item.is_dir() else ""))
     return "\n".join(entries) or "(empty workspace)"
 
@@ -45,7 +47,7 @@ def search(root, args):
         raise ValueError(f"invalid pattern: {exc}") from exc
     results = []
     workspace = Path(root)
-    for file_path in sorted(item for item in workspace.rglob("*") if item.is_file() and ".git" not in item.parts):
+    for file_path in sorted(item for item in workspace.rglob("*") if item.is_file() and ".git" not in item.parts and ".mini-coding-agent" not in item.parts):
         try:
             lines = file_path.read_text(encoding="utf-8").splitlines()
         except (UnicodeDecodeError, OSError):

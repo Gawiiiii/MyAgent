@@ -43,7 +43,7 @@ class AuditLog:
     def _sanitize(key, value):
         """裁剪文本并脱敏敏感字段；参数为字段名和值，返回可序列化值。"""
         lowered = key.lower()
-        if any(marker in lowered for marker in ("api_key", "token", "secret", "password")):
+        if lowered in {"api_key", "access_token", "auth_token", "secret", "password"}:
             return "[redacted]"
         if isinstance(value, str):
             return clip(value)

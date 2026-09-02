@@ -33,7 +33,8 @@ class WorkspaceContext:
                     key = str(file_path.relative_to(repo_root))
                     if key not in docs:
                         docs[key] = file_path.read_text(encoding="utf-8", errors="replace")[:1200]
-        return cls(cwd, repo_root, git(["branch", "--show-current"], "-"), "main", git(["status", "--short"], "clean") or "clean", git(["log", "--oneline", "-5"]).splitlines(), docs)
+        status = "\n".join(line for line in git(["status", "--short"], "clean").splitlines() if ".mini-coding-agent" not in line) or "clean"
+        return cls(cwd, repo_root, git(["branch", "--show-current"], "-"), "main", status, git(["log", "--oneline", "-5"]).splitlines(), docs)
 
     def text(self):
         """格式化工作区上下文；参数为 self，返回可放入 Prompt 的 str。"""

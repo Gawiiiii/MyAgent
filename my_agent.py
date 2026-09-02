@@ -1,3 +1,4 @@
+import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,7 +19,7 @@ from workspace import WorkspaceContext
 
 
 class MyAgent:
-    def __init__(self, model_client, root, max_steps=6, approval="ask", max_new_tokens=512, workspace=None, session_store=None, session=None, depth=0, max_depth=1, read_only=False, max_parallel_delegates=3, persist_session=True, audit_log=None):
+    def __init__(self, model_client, root, max_steps=6, approval="ask", max_new_tokens=4096, workspace=None, session_store=None, session=None, depth=0, max_depth=1, read_only=False, max_parallel_delegates=3, persist_session=True, audit_log=None):
         """初始化 Agent；参数为模型客户端、根目录、运行配置及可选上下文会话，返回 None。"""
         self.model_client = model_client
         self.workspace = workspace or WorkspaceContext.build(root)
@@ -61,9 +62,10 @@ class MyAgent:
         self.record({"role": "user", "content": user_message})
         self.session["memory"]["task"] = user_message
         self._save_session()
-        observations, attempts, tool_steps = "", 0, 0
+        observations, attempts, tool_steps, empty_responses = "", 0, 0, 0
+        tool_calls = set()
         max_attempts = max(self.max_steps * 3, self.max_steps + 4)
-        while attempts < max_attempts and tool_steps < self.max_steps:
+        while attempts < max_attempts:
             attempts += 1
             prompt = self.prompt(user_message, observations)
             self.audit_log.append("model_request", attempt=attempts, max_new_tokens=self.max_new_tokens)
@@ -72,7 +74,8 @@ class MyAgent:
             except RuntimeError as exc:
                 self.audit_log.append("model_error", attempt=attempts, error=str(exc))
                 raise
-            self.audit_log.append("model_response", attempt=attempts, output=raw)
+            metadata = getattr(self.model_client, "last_response_metadata", {})
+            self.audit_log.append("model_response", attempt=attempts, output=raw, **metadata)
             result = parse(raw)
             self.audit_log.append("parse_result", kind=result.get("kind"), error=result.get("error", ""))
             if result["kind"] == "final":
@@ -81,15 +84,30 @@ class MyAgent:
                 return result["content"]
             if result["kind"] == "retry":
                 self.record({"role": "assistant", "content": f"format error: {result['error']}"})
+                if result["error"] == "empty response":
+                    empty_responses += 1
+                    if empty_responses >= 3:
+                        stop = "Stopped after 3 consecutive empty model responses. Check the model output limit and provider response metadata."
+                        self.record({"role": "assistant", "content": stop})
+                        self.audit_log.append("final_answer", content=stop)
+                        return stop
+                else:
+                    empty_responses = 0
                 observations += f"\nModel format error: {result['error']}. Retry using the required tag."
                 continue
+            empty_responses = 0
             name, args = result["name"], result["args"]
+            if tool_steps >= self.max_steps:
+                break
             tool_steps += 1
-            if self.repeated_tool_call(name, args):
+            if self.repeated_tool_call(name, args, tool_calls):
                 output = f"error: repeated tool call for {name} with identical arguments"
                 self.note_tool(name, args, output)
                 observations += f"\n{name} result:\n{output}"
+                if tool_steps >= self.max_steps:
+                    break
                 continue
+            tool_calls.add(self.tool_call_key(name, args))
             self.audit_log.append("tool_start", name=name, args=args)
             output = self.run_tool(name, args)
             self.audit_log.append("tool_error" if output.startswith("error:") else "tool_result", name=name, result=output)
@@ -100,9 +118,14 @@ class MyAgent:
         self.audit_log.append("final_answer", content=stop)
         return stop
 
-    def repeated_tool_call(self, name, args):
-        """判断工具调用是否重复；参数为工具名 str 和参数 dict，返回 bool。"""
-        return any(item.get("role") == "tool" and item.get("name") == name and item.get("args") == args for item in self.session["history"])
+    @staticmethod
+    def tool_call_key(name, args):
+        """生成工具调用比较键；参数为名称和参数字典，返回规范字符串。"""
+        return f"{name}:{json.dumps(args, ensure_ascii=False, sort_keys=True)}"
+
+    def repeated_tool_call(self, name, args, tool_calls=None):
+        """判断当前 ask 内工具调用是否重复；参数为名称、参数和调用集合，返回 bool。"""
+        return self.tool_call_key(name, args) in (tool_calls or set())
 
     def approve(self, name, args, preview=""):
         """决定风险工具是否执行；参数为工具名 str 和参数 dict，返回允许执行的 bool。"""

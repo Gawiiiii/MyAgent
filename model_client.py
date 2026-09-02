@@ -1,7 +1,6 @@
-"""Small HTTP clients used by the first MyAgent loop."""
-
 import json
 import os
+import threading
 import urllib.error
 import urllib.request
 
@@ -31,6 +30,12 @@ class OpenAICompatibleModelClient:
         self.temperature = temperature
         self.top_p = top_p
         self.timeout = timeout
+        self._response_state = threading.local()
+
+    @property
+    def last_response_metadata(self):
+        """读取当前线程最近响应元数据；参数为 self，返回 dict。"""
+        return getattr(self._response_state, "metadata", {})
 
     def complete(self, prompt, max_new_tokens):
         """请求聊天补全；参数为 str Prompt 和 int token 上限，返回模型文本 str。"""
@@ -59,7 +64,14 @@ class OpenAICompatibleModelClient:
         except (urllib.error.URLError, TimeoutError) as exc:
             raise RuntimeError(f"could not reach model at {self.base_url}: {exc}") from exc
         try:
-            return data["choices"][0]["message"]["content"] or ""
+            choice = data["choices"][0]
+            message = choice["message"]
+            self._response_state.metadata = {
+                "finish_reason": choice.get("finish_reason"),
+                "usage": data.get("usage", {}),
+                "reasoning_content": message.get("reasoning_content") or "",
+            }
+            return message.get("content") or ""
         except (KeyError, IndexError, TypeError) as exc:
             raise RuntimeError("model response did not contain choices[0].message.content") from exc
 
@@ -72,6 +84,12 @@ class OllamaModelClient:
         self.temperature = temperature
         self.top_p = top_p
         self.timeout = timeout
+        self._response_state = threading.local()
+
+    @property
+    def last_response_metadata(self):
+        """读取当前线程最近响应元数据；参数为 self，返回 dict。"""
+        return getattr(self._response_state, "metadata", {})
 
     def complete(self, prompt, max_new_tokens):
         """请求 Ollama 生成；参数为 str Prompt 和 int token 上限，返回模型文本 str。"""
@@ -95,6 +113,14 @@ class OllamaModelClient:
             raise RuntimeError(f"could not reach Ollama at {self.host}: {exc}") from exc
         if data.get("error"):
             raise RuntimeError(f"Ollama error: {data['error']}")
+        self._response_state.metadata = {
+            "finish_reason": data.get("done_reason"),
+            "usage": {
+                "prompt_tokens": data.get("prompt_eval_count"),
+                "completion_tokens": data.get("eval_count"),
+            },
+            "reasoning_content": data.get("thinking") or "",
+        }
         return data.get("response", "")
 
 
@@ -104,6 +130,7 @@ class FakeModelClient:
     def __init__(self, outputs):
         """初始化输出队列；参数为可迭代的 str 输出，返回 None。"""
         self.outputs = iter(outputs)
+        self.last_response_metadata = {}
 
     def complete(self, prompt, max_new_tokens):
         """返回下一条预设响应；参数为 Prompt 和 token 上限，返回 str。"""

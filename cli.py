@@ -19,7 +19,7 @@ def run(argv=None):
     parser.add_argument("--model", default="deepseek-v4-flash")
     parser.add_argument("--host", default="http://127.0.0.1:11434")
     parser.add_argument("--max-steps", type=int, default=6)
-    parser.add_argument("--max-new-tokens", type=int, default=512)
+    parser.add_argument("--max-new-tokens", type=int, default=4096)
     parser.add_argument("--approval", choices=["ask", "auto", "never"], default="ask")
     parser.add_argument("--temperature", type=float, default=0.2)
     parser.add_argument("--top-p", type=float, default=0.9)
