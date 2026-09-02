@@ -28,7 +28,20 @@ def build_prefix(agent):
     rules = [
         "You are a coding agent. Work only with the workspace below.",
         "Available tools:", tools,
-        'Respond with <tool>{"name":...,"args":{...}}</tool>, XML write/patch tags, or <final>answer</final>.',
+        "You must output exactly one message, and it must use one of these two forms only:\n"
+        'Tool call: <tool>{"name":"read_file","args":{"path":"README.md"}}</tool>\n'
+        "Final answer: <final>Task completed.</final>\n"
+        "Strict output rules:\n"
+        "1. The response must start with <tool> or <final> and end with the matching closing tag.\n"
+        "2. Output exactly one tag; never emit multiple tool calls.\n"
+        "3. Do not output Markdown, code fences, explanations, planning text, or any prefix/suffix.\n"
+        "4. For compatibility, a tool call may alternatively use exactly one XML invoke envelope: "
+        '<tool><invoke name="read_file"><parameter name="path">README.md</parameter></invoke></tool>. '
+        "Do not use any other XML shape.\n"
+        "5. A tool call must contain valid JSON with a string name and an object args field.\n"
+        "6. For write_file, put the complete file text in the JSON args.content string.\n"
+        "7. For patch_file, put the exact replacement fields in JSON args.old_text and args.new_text.\n"
+        "8. When a tool is needed, emit the tool tag immediately; do not describe the intended action first.",
         "For read_file, use retry=true only when retrying the same read after that read failed. After a successful read, file change, or command, read normally without retry.",
     ]
     if agent.read_only:

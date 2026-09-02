@@ -1,5 +1,6 @@
 import json
 import re
+import xml.etree.ElementTree as ET
 
 
 def extract(text, tag):
@@ -19,21 +20,56 @@ def parse(raw):
         return {"kind": "retry", "error": "empty final response"}
     payload = extract(raw, "tool")
     if payload is None:
-        match = re.fullmatch(r'\s*<tool\s+name="(write_file|patch_file)"\s+path="([^"]+)">(.*?)</tool>\s*', raw or "", re.DOTALL)
-        if match:
-            name, file_path, body = match.groups()
-            content_match = re.fullmatch(r"\s*<content>(.*?)</content>\s*", body, re.DOTALL)
-            if name == "write_file" and content_match:
-                return {"kind": "tool", "name": name, "args": {"path": file_path, "content": content_match.group(1)}}
-            patch_match = re.fullmatch(r"\s*<old_text>(.*?)</old_text>\s*<new_text>(.*?)</new_text>\s*", body, re.DOTALL)
-            if name == "patch_file" and patch_match:
-                return {"kind": "tool", "name": name, "args": {"path": file_path, "old_text": patch_match.group(1), "new_text": patch_match.group(2)}}
-    if payload is None:
-        return {"kind": "retry", "error": "expected <tool>{JSON}</tool> or <final>...</final>"}
+        # Accept the XML-style invoke envelope emitted by some models.  This
+        # is normalized into the same internal tool-call representation as the
+        # canonical JSON form.
+        try:
+            root = ET.fromstring(raw.strip())
+            invoke = root.find("invoke") if root.tag == "tool" else None
+            if invoke is not None and invoke.get("name") and len(root) == 1:
+                args = {}
+                for parameter in invoke.findall("parameter"):
+                    parameter_name = parameter.get("name")
+                    if not parameter_name or parameter_name in args or len(parameter):
+                        raise ValueError("invalid invoke parameter")
+                    args[parameter_name] = parameter.text or ""
+                if len(args) == len(invoke):
+                    return {"kind": "tool", "name": invoke.get("name"), "args": args}
+        except (ET.ParseError, ValueError, TypeError):
+            pass
+        return {
+            "kind": "retry",
+            "error": (
+                'expected exactly one <tool>{"name":"...","args":{...}}</tool> '
+                'or <final>...</final> response'
+            ),
+        }
     try:
         call = json.loads(payload)
         if not isinstance(call, dict) or not isinstance(call.get("name"), str) or not isinstance(call.get("args", {}), dict):
             raise ValueError("tool call must contain a name and object args")
         return {"kind": "tool", "name": call["name"], "args": call.get("args", {})}
     except (json.JSONDecodeError, ValueError, TypeError) as exc:
-        return {"kind": "retry", "error": f"invalid tool JSON: {exc}"}
+        # The invoke form also uses a tool envelope, but its payload is XML;
+        # recognize it after the canonical JSON parse fails.
+        try:
+            root = ET.fromstring(raw.strip())
+            invoke = root.find("invoke") if root.tag == "tool" else None
+            if invoke is not None and invoke.get("name") and len(root) == 1:
+                args = {}
+                for parameter in invoke.findall("parameter"):
+                    parameter_name = parameter.get("name")
+                    if not parameter_name or parameter_name in args or len(parameter):
+                        raise ValueError("invalid invoke parameter")
+                    args[parameter_name] = parameter.text or ""
+                if len(args) == len(invoke):
+                    return {"kind": "tool", "name": invoke.get("name"), "args": args}
+        except (ET.ParseError, ValueError, TypeError):
+            pass
+        return {
+            "kind": "retry",
+            "error": (
+                f"invalid tool JSON: {exc}; output exactly one "
+                '<tool>{"name":"TOOL_NAME","args":{...}}</tool>'
+            ),
+        }

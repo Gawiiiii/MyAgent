@@ -127,11 +127,23 @@ class CurrentVersionTests(unittest.TestCase):
                 return
             self.assertIn("path escapes workspace", agent.run_tool("read_file", {"path": "link/secret.txt"}))
 
-    def test_parser_accepts_xml_write_and_patch_calls(self):
-        write = parse('<tool name="write_file" path="main.py"><content>print(1)</content></tool>')
-        patch = parse('<tool name="patch_file" path="main.py"><old_text>1</old_text><new_text>2</new_text></tool>')
+    def test_parser_accepts_json_write_and_patch_calls(self):
+        write = parse('<tool>{"name":"write_file","args":{"path":"main.py","content":"print(1)"}}</tool>')
+        patch = parse('<tool>{"name":"patch_file","args":{"path":"main.py","old_text":"1","new_text":"2"}}</tool>')
+        legacy = parse('<tool name="write_file" path="main.py"><content>print(1)</content></tool>')
         self.assertEqual((write["name"], write["args"]["content"]), ("write_file", "print(1)"))
         self.assertEqual((patch["name"], patch["args"]["new_text"]), ("patch_file", "2"))
+        self.assertEqual(legacy["kind"], "retry")
+
+    def test_parser_accepts_invoke_parameter_calls(self):
+        invoke = parse(
+            '<tool>\n'
+            '  <invoke name="read_file">\n'
+            '    <parameter name="path">tests/test.sh</parameter>\n'
+            '  </invoke>\n'
+            '</tool>'
+        )
+        self.assertEqual(invoke, {"kind": "tool", "name": "read_file", "args": {"path": "tests/test.sh"}})
 
 
 if __name__ == "__main__":

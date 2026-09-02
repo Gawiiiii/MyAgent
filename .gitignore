@@ -4,3 +4,8 @@ __pycache__/
 .pytest_cache/
 *.egg-info/
 full_test_2_trace.log
+
+# Only demo/cancel_async_tasks is intended to be committed.
+/demo/*
+!/demo/cancel_async_tasks/
+!/demo/cancel_async_tasks/**

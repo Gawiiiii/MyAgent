@@ -14,17 +14,16 @@ class LRUCache:
         if key not in self.cache:
             return -1
 
-        # BUG: accessing a key should mark it as recently used.
+        self.cache.move_to_end(key)
         return self.cache[key]
 
     def put(self, key, value):
         if key in self.cache:
-            # BUG: updating a key should also mark it as recently used.
             self.cache[key] = value
+            self.cache.move_to_end(key)
             return
 
         self.cache[key] = value
 
         if len(self.cache) > self.capacity:
-            # BUG: this removes the most recently used item.
-            self.cache.popitem(last=True)
+            self.cache.popitem(last=False)

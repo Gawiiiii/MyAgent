@@ -17,6 +17,9 @@ from session import SessionStore
 from tools import build_tools, validate_tool
 from workspace import WorkspaceContext
 
+FORMAT_ERROR_LIMIT = 3
+TOOL_FORMAT_EXAMPLE = '<tool>{"name":"read_file","args":{"path":"README.md"}}</tool>'
+
 
 class MyAgent:
     def __init__(self, model_client, root, max_steps=6, approval="ask", max_new_tokens=4096, workspace=None, session_store=None, session=None, depth=0, max_depth=1, read_only=False, max_parallel_delegates=3, persist_session=True, audit_log=None, unlimited_tool_calls=True, status=None):
@@ -88,7 +91,23 @@ class MyAgent:
                 return result["content"]
             if result["kind"] == "retry":
                 format_errors += 1
-                self.record({"role": "assistant", "content": f"format error: {result['error']}"})
+                # Preserve the exact model text in the session as well as the
+                # audit's model_response event, so format failures can be
+                # diagnosed from persisted data rather than inferred.
+                self.record({
+                    "role": "assistant",
+                    "content": (
+                        f"format error: {result['error']}\n"
+                        "raw model response:\n"
+                        f"{raw}"
+                    ),
+                })
+                self.audit_log.append(
+                    "format_error",
+                    attempt=attempts,
+                    error=result["error"],
+                    raw_response=raw,
+                )
                 if result["error"] == "empty response":
                     empty_responses += 1
                     if empty_responses >= 3:
@@ -99,9 +118,20 @@ class MyAgent:
                         return stop
                 else:
                     empty_responses = 0
-                if format_errors >= max_attempts:
-                    break
-                observations += f"\nModel format error: {result['error']}. Retry using the required tag."
+                if format_errors >= FORMAT_ERROR_LIMIT:
+                    stop = (
+                        f"Agent stopped after {FORMAT_ERROR_LIMIT} consecutive invalid model responses. "
+                        "The model did not follow the required tool format. "
+                        f"Expected exactly one JSON tool call, for example: {TOOL_FORMAT_EXAMPLE}"
+                    )
+                    self.record({"role": "assistant", "content": stop})
+                    self.audit_log.append("final_answer", content=stop)
+                    self._status("")
+                    return stop
+                observations += (
+                    f"\nModel format error: {result['error']}. Output exactly one JSON-tagged call, "
+                    f"with no markdown or XML. Example: {TOOL_FORMAT_EXAMPLE}"
+                )
                 continue
             empty_responses = 0
             format_errors = 0
@@ -122,7 +152,7 @@ class MyAgent:
                 if not self.unlimited_tool_calls and tool_steps >= self.max_steps:
                     break
                 continue
-            self._status(f"Tool calling {name}...")
+            self._status(self._tool_status(name, args))
             self.audit_log.append("tool_start", name=name, args=args)
             output = self.run_tool(name, args)
             self.audit_log.append("tool_error" if output.startswith("error:") else "tool_result", name=name, result=output)
@@ -138,6 +168,25 @@ class MyAgent:
         """更新单行执行状态；参数为状态文本，返回 None。"""
         if self.status:
             self.status(message)
+
+    def _tool_status(self, name, args):
+        """生成包含操作目标的工具状态文本；参数为工具名和参数字典，返回 str。"""
+        args = args if isinstance(args, dict) else {}
+        if name == "list_files":
+            detail = f"in {self.root}"
+        elif name in {"read_file", "write_file", "patch_file", "preview_file"}:
+            detail = str(args.get("path", "(unknown path)"))
+        elif name == "search":
+            detail = f"pattern={args.get('pattern', '(unknown pattern)')}"
+        elif name == "run_shell":
+            detail = f"command={args.get('command', '(unknown command)')}"
+        elif name == "delegate":
+            detail = f"task={args.get('task', '(unknown task)')}"
+        elif name == "delegate_parallel":
+            detail = f"{len(args.get('tasks', []))} tasks"
+        else:
+            detail = ""
+        return f"Tool calling {name} {detail}..." if detail else f"Tool calling {name}..."
 
     def approve(self, name, args, preview=""):
         """决定风险工具是否执行；参数为工具名 str 和参数 dict，返回允许执行的 bool。"""

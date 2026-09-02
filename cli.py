@@ -52,7 +52,7 @@ def run(argv=None):
     parser.add_argument("--base-url", default="https://api.deepseek.com")
     parser.add_argument("--api-key-env", default="DEEPSEEK_API_KEY")
     parser.add_argument("--env-file", default=".env", help="file containing KEY=VALUE settings")
-    parser.add_argument("--model", default="deepseek-v4-flash")
+    parser.add_argument("--model", default="deepseek-v4-pro")
     parser.add_argument("--host", default="http://127.0.0.1:11434")
     parser.add_argument("--max-steps", type=int, default=12)
     parser.add_argument("--unlimited-tool-calls", action=argparse.BooleanOptionalAction, default=True, help="allow unlimited tool calls")
